@@ -1,0 +1,18 @@
+# Секреты: ключ модели живёт только здесь и никогда не попадает в git.
+.env
+.env.local
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Служебные кэши (пересоздаются из каталога)
+data/cache/
+.pytest_cache/
+.idea/
+.vscode/

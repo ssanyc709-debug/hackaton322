@@ -1,2 +1,12 @@
-# Auto detect text files and perform LF normalization
+# Автоопределение текстовых файлов и LF-нормализация.
 * text=auto
+
+# Точка входа по контракту обязана быть bash-скриптом с LF и режимом +x.
+run text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+
+# Если репозиторий клонирован на Windows, права +x восстанавливаются командой:
+#   git update-index --chmod=+x run
