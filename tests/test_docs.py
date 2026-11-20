@@ -90,7 +90,7 @@ class AlgorithmsDocumentTest(unittest.TestCase):
     def test_documented_numbers_match_measurements(self) -> None:
         """Числа в документе — из замеров, а не «на глаз»."""
         self.assertIn("111 объявлений", self.text)
-        self.assertIn("62 %", self.text)
+        self.assertIn("89 %", self.text)
 
 
 class TokenBudgetDocumentTest(unittest.TestCase):
@@ -111,7 +111,7 @@ class TokenBudgetDocumentTest(unittest.TestCase):
 
     def test_mentions_the_sixty_percent_goal_and_the_result(self) -> None:
         self.assertIn("60", self.text)
-        self.assertIn("62", self.text)
+        self.assertIn("89", self.text)
 
 
 class ReadmeTest(unittest.TestCase):

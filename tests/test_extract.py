@@ -190,7 +190,12 @@ class CacheTest(unittest.TestCase):
 
 
 class ModelFallbackTest(unittest.TestCase):
-    """Модель вызывается только когда лексикон не закрыл обязательные условия."""
+    """Модель вызывается только там, где она МОЖЕТ закрыть недостающее условие.
+
+    Блок 9: недостаточно «условия неполны» — нужно, чтобы у модели был материал.
+    Бюджет и город из ниоткуда не берутся, поэтому такие вызовы отсекаются
+    (:func:`app.nlp.extract.model_can_help`).
+    """
 
     def setUp(self) -> None:
         self.calls: list[str] = []
@@ -204,11 +209,36 @@ class ModelFallbackTest(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(slots.source, "lexicon")
 
-    def test_one_model_call_when_budget_missing(self) -> None:
-        slots = extract_message(EXAMPLE_02, resolver=self.resolver)
+    def test_one_model_call_when_only_categories_missing(self) -> None:
+        """Город и бюджет названы, предмет — описательно: это работа для модели."""
+        slots = extract_message(
+            "Нужна деревяшка с четырьмя ножками. Таганрог. До 15000.", resolver=self.resolver
+        )
         self.assertEqual(len(self.calls), 1)
-        self.assertEqual(slots.budget_rub, 12000)
         self.assertEqual(slots.source, "model")
+
+    def test_no_model_call_when_budget_is_not_named(self) -> None:
+        """В EXAMPLE_02 нет ни одного числа: бюджет взять неоткуда, вызов бесполезен."""
+        slots = extract_message(EXAMPLE_02, resolver=self.resolver)
+        self.assertEqual(self.calls, [])
+        self.assertIsNone(slots.budget_rub)
+
+    def test_no_model_call_when_nothing_is_named(self) -> None:
+        slots = extract_message("Хочу мебель", resolver=self.resolver)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(
+            missing_fields(slots), (FIELD_CITY, FIELD_BUDGET, FIELD_CATEGORIES)
+        )
+
+    def test_no_model_call_for_unknown_city(self) -> None:
+        """Город вне справочника: подставлять другой город нельзя."""
+        extract_message("Стол в Москве до 30000", resolver=self.resolver)
+        self.assertEqual(self.calls, [])
+
+    def test_no_model_call_for_quantity_without_money(self) -> None:
+        """«2 кресла» — количество, а не бюджет: признака денег в тексте нет."""
+        extract_message("Нужны 2 кресла", resolver=self.resolver)
+        self.assertEqual(self.calls, [])
 
     def test_model_does_not_override_local_values(self) -> None:
         def hostile(text: str, slots) -> dict[str, object]:
@@ -223,7 +253,7 @@ class ModelFallbackTest(unittest.TestCase):
         def bad(text: str, slots) -> dict[str, object]:
             return {"city_id": "moscow", "budget_rub": 9000}
 
-        slots = extract_message("кресло и лампа", resolver=bad)
+        slots = extract_message("кресло и лампа до 20000, заберу в выходные", resolver=bad)
         self.assertIsNone(slots.city_id)
 
     def test_model_error_is_not_swallowed(self) -> None:
@@ -232,20 +262,74 @@ class ModelFallbackTest(unittest.TestCase):
             raise TimeoutError("шлюз не ответил")
 
         with self.assertRaises(TimeoutError):
-            extract_message(EXAMPLE_02, resolver=broken)
+            extract_message("Нужна деревяшка. Таганрог, до 15000", resolver=broken)
 
     def test_empty_model_answer_keeps_local_result(self) -> None:
         def silent(text: str, slots) -> dict[str, object] | None:
             return None
 
-        slots = extract_message(EXAMPLE_02, resolver=silent)
+        slots = extract_message("Нужна деревяшка. Таганрог, до 15000", resolver=silent)
         self.assertEqual(slots.city_id, "taganrog")
-        self.assertIsNone(slots.budget_rub)
+        self.assertEqual(slots.budget_rub, 15000)
+        self.assertEqual(slots.categories, ())
 
     def test_offline_never_calls_model(self) -> None:
         slots = extract_message(EXAMPLE_02, resolver=self.resolver, allow_model=False)
         self.assertEqual(self.calls, [])
         self.assertIsNone(slots.budget_rub)
+
+
+class ModelGateTest(unittest.TestCase):
+    """Три фразы из задачи + защита от переусердствования (блок 9)."""
+
+    def calls_for(self, text: str) -> list[str]:
+        calls: list[str] = []
+
+        def resolver(payload: str, slots) -> dict[str, object]:
+            calls.append(payload)
+            return {"categories": ["table"]}
+
+        extract_message(text, resolver=resolver)
+        return calls
+
+    def test_descriptive_phrase_asks_the_model(self) -> None:
+        """«Деревяшка с четырьмя ножками»: лексикон таких слов не знает."""
+        self.assertEqual(
+            len(self.calls_for("Нужна деревяшка с 4 ножками, на которую ставят вещи. Таганрог. До 15000.")),
+            1,
+        )
+
+    def test_preposition_role_does_not_mean_a_table(self) -> None:
+        """«Посветить над столом» — просьба о лампе, стол здесь место."""
+        slots = extract_message("Надо чем посветить над столом. Ростов-на-Дону, до 5000.")
+        self.assertEqual(slots.categories, ("lamp",))
+        self.assertEqual(self.calls_for("Надо чем посветить над столом. Ростов-на-Дону, до 5000."), [])
+
+    def test_work_is_not_a_working_table(self) -> None:
+        """«Сидеть за работой»: fuzzy-совпадение с «рабочий» — не товар."""
+        slots = extract_message("Купил бы что-нибудь, чтобы сидеть за работой. Таганрог, тысяч пятнадцать.")
+        self.assertEqual(slots.categories, ())
+        # Город и бюджет известны → модель может назвать предмет по описанию.
+        self.assertEqual(len(self.calls_for("Купил бы что-нибудь, чтобы сидеть за работой. Таганрог, тысяч пятнадцать.")), 1)
+
+    def test_typo_is_still_a_category(self) -> None:
+        """«Стлл» — опечатка существительного, а не прилагательного: работает локально."""
+        slots = extract_message("Нужен стлл. Таганрог, до 15000.")
+        self.assertEqual(slots.categories, ("table",))
+        self.assertEqual(self.calls_for("Нужен стлл. Таганрог, до 15000."), [])
+
+    def test_exact_phrase_costs_nothing(self) -> None:
+        self.assertEqual(self.calls_for(EXAMPLE_01), [])
+
+    def test_table_for_a_laptop_keeps_the_table(self) -> None:
+        """Предлог ПОСЛЕ названия товара не отменяет товар."""
+        slots = extract_message("Стол под ноутбук. Таганрог, до 15000.")
+        self.assertEqual(slots.categories, ("table",))
+
+    def test_amount_is_not_a_place(self) -> None:
+        slots = extract_message("Стол и кресло на 15 000. Таганрог.")
+        self.assertEqual(slots.categories, ("table", "chair"))
+        self.assertEqual(slots.budget_rub, 15000)
 
 
 if __name__ == "__main__":

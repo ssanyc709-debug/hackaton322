@@ -49,9 +49,20 @@ CATEGORY_WORDS: dict[str, tuple[str, ...]] = {
     "lamp": (
         "лампа", "лампы", "лампу", "лампой", "лампочка", "лампочки", "светильник",
         "светильника", "торшер", "торшера", "ночник", "бра", "люстра", "люстры",
-        "прожектор", "подсветка", "lamp", "light",
+        "прожектор", "подсветка",
+        # Глаголы света: «чем посветить над столом» — это запрос лампы.
+        "свет", "посветить", "осветить", "освещение",
+        "lamp", "light",
     ),
 }
+
+#: Прилагательные из словаря категорий. Нечёткое совпадение с ними — не опечатка
+#: товара, а соседнее слово: «сидеть за работой» не означает «рабочий стол».
+#: Поэтому fuzzy-совпадение с таким ключом отбрасывается, а точное/стем — нет:
+#: «письменный», «компьютерная» продолжают работать.
+CATEGORY_ADJECTIVE_WORDS: tuple[str, ...] = (
+    "рабочий", "письменный", "компьютерный", "обеденный",
+)
 
 #: Конкретные предметы вне таксономии: покупатель явно просит не то, что умеем —
 #: это ``clarify`` по полю ``categories``, а не «нет совпадений».
@@ -108,7 +119,27 @@ NOISE_WORDS: frozenset[str] = frozenset(
 )
 
 #: Слова, которые не должны считаться категорией, даже если похожи на неё.
-STOPWORD_GUARDS: frozenset[str] = frozenset({"свет", "света", "светло", "столовая"})
+#: «свет» сюда больше не входит (это запрос лампы), но прилагательные «светлый»
+#: остаются: иначе «светлый стол» давал бы лампу через нечёткое совпадение.
+STOPWORD_GUARDS: frozenset[str] = frozenset(
+    {
+        "светло", "столовая", "светает", "светился", "светилась", "светились",
+        "светлый", "светлая", "светлое", "светлые", "светлого", "светлому",
+        "светлым", "светлой", "светлую", "светлых", "светлыми",
+    }
+)
+
+#: Базовые слова-омонимы, которые рядом со словами света и короткими словами
+#: категорий дают ложное совпадение: «пара» ↔ «парта» (d=1), «скол» ↔ «стол»,
+#: «след» ↔ «седло», «краска/красно/крепко» ↔ «кресло», «стоял» ↔ «стол» через
+#: стем «сто». Из них строятся формы (:attr:`Lexicon.guard_forms`), поэтому
+#: список короткий и покрывает словоизменение. Это не расширение словаря
+#: категорий, а защита от него — ровно как «светлый».
+GUARD_WORDS: tuple[str, ...] = (
+    "совет", "ответ", "цвет", "освежить",
+    "пара", "скол", "след", "слезло", "краска", "красно", "крепко",
+    "стоять", "стойка",
+)
 
 #: Минимальная длина слова для нечёткого поиска: короткие слова слишком шумные.
 MIN_FUZZY_LENGTH = 4
@@ -346,8 +377,10 @@ class WordIndex:
     стема: это снимает непостоянство Porter («ростов» → «рост») и заодно
     поддерживает формы, которые стеммер портит («стол» → «сто»).
 
-    Вход/выход ``lookup``: слово → ``(значение, способ)``; ``("", "")``, если
-    ничего не найдено.
+    Вход/выход ``lookup``: слово → ``(значение, способ, ключ словаря)``;
+    ``("", "", "")``, если ничего не найдено. Ключ нужен вызывающему, чтобы
+    отличить опечатку существительного («стлл» → «стол») от соседнего
+    прилагательного («работой» → «рабочий»).
 
     Алгоритм поиска: точный хеш → формы из :func:`candidate_forms` (O(1) каждая) →
     триграммы запроса → пересечение с инвертированным индексом → Левенштейн по
@@ -389,29 +422,34 @@ class WordIndex:
                 self._trigram_index.setdefault(gram, set()).add(form)
             self._keys.add(form)
 
-    def lookup(self, word: str) -> tuple[str, str]:
-        """Ищет значение слова: точная форма → стем → нечёткий поиск."""
+    def lookup(self, word: str) -> tuple[str, str, str]:
+        """Ищет значение слова: точная форма → стем → нечёткий поиск.
+
+        Возвращает ``(значение, способ, ключ)``; ключ — форма словаря, по которой
+        нашлось совпадение (для fuzzy это важно: опечатка товара или чужое слово).
+        """
         for form in candidate_forms(word):
             value = self._exact.get(form)
             if value is not None:
-                return value, ("exact" if form == word else "stem")
+                return value, ("exact" if form == word else "stem"), form
         if len(word) < MIN_FUZZY_LENGTH:
-            return "", ""
+            return "", "", ""
         return self._fuzzy(word)
 
-    def _fuzzy(self, word: str) -> tuple[str, str]:
+    def _fuzzy(self, word: str) -> tuple[str, str, str]:
         """Нечёткий поиск по триграммному индексу с ограничением кандидатов."""
         gram_counts: dict[str, int] = {}
         for gram in trigrams(word):
             for candidate_key in self._trigram_index.get(gram, ()):
                 gram_counts[candidate_key] = gram_counts.get(candidate_key, 0) + 1
         if not gram_counts:
-            return "", ""
+            return "", "", ""
         # Сначала самые похожие по триграммам; берём не больше пяти кандидатов,
         # чтобы Левенштейн не считался по всему словарю.
         candidates = sorted(gram_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
         limit = 1 if len(word) <= 5 else 2
         best_value = ""
+        best_key = ""
         best_distance = limit + 1
         ambiguous = False
         for candidate_key, _ in candidates:
@@ -424,10 +462,11 @@ class WordIndex:
             if distance < best_distance:
                 best_distance = distance
                 best_value = value
+                best_key = candidate_key
                 ambiguous = False
             elif distance == best_distance and value != best_value:
                 ambiguous = True
-        return ("", "") if ambiguous else (best_value, "fuzzy")
+        return ("", "", "") if ambiguous else (best_value, "fuzzy", best_key)
 
 
 class Lexicon:
@@ -456,14 +495,33 @@ class Lexicon:
 
         self.noise = NOISE_WORDS
         self.guards = STOPWORD_GUARDS
+        # Формы слов-омонимов: «совет» → «сов», «ответ» → «отв» — стеммер режет
+        # и это, поэтому храним весь набор форм, а не одно слово.
+        # Берутся только точная форма и ПЕРВЫЙ стем: двойной стем «стоять» даёт
+        # «сто», а это же основа слова «стол» — защита съела бы сам товар.
+        self.guard_forms = frozenset(
+            form
+            for word in GUARD_WORDS
+            for form in (word, stem(word))
+            if len(form) >= 3
+        )
+        # Формы прилагательных, с которыми fuzzy-совпадение не считается опечаткой.
+        self.category_adjectives = frozenset(
+            form for word in CATEGORY_ADJECTIVE_WORDS for form in candidate_forms(word)
+        )
 
     def scan_cities(self, tokens: Sequence[str]) -> tuple[Hit, ...]:
         """Все упоминания города в порядке текста."""
         return self._scan(tokens, self.cities)
 
     def scan_categories(self, tokens: Sequence[str]) -> tuple[Hit, ...]:
-        """Все упоминания поддерживаемых категорий в порядке текста."""
-        return self._scan(tokens, self.categories)
+        """Все упоминания поддерживаемых категорий в порядке текста.
+
+        Нечёткое совпадение с прилагательным отбрасывается: «сидеть за работой»
+        не становится «рабочим столом», а опечатка существительного («стлл»,
+        «креслр») по-прежнему распознаётся.
+        """
+        return self._scan(tokens, self.categories, reject_fuzzy=self.category_adjectives)
 
     def scan_unsupported_categories(self, tokens: Sequence[str]) -> tuple[Hit, ...]:
         """Упоминания предметов вне таксономии (диван, шкаф, кровать…)."""
@@ -473,17 +531,33 @@ class Lexicon:
         """Упоминания городов вне справочника (Москва, Питер…)."""
         return self._scan(tokens, self.unsupported_cities)
 
-    def _scan(self, tokens: Sequence[str], index: WordIndex) -> tuple[Hit, ...]:
-        """Линейный проход по токенам; шум и служебные слова пропускаются."""
+    def _scan(
+        self,
+        tokens: Sequence[str],
+        index: WordIndex,
+        reject_fuzzy: frozenset[str] = frozenset(),
+    ) -> tuple[Hit, ...]:
+        """Линейный проход по токенам; шум и служебные слова пропускаются.
+
+        ``reject_fuzzy`` — ключи словаря, совпадение с которыми не считается
+        опечаткой (прилагательные категорий).
+        """
         hits: list[Hit] = []
         for position, token in enumerate(tokens):
             if token in self.noise or token in self.guards or len(token) < 3:
                 continue
             if not token.isalpha():
                 continue
-            value, how = index.lookup(token)
-            if value:
-                hits.append(Hit(value=value, position=position, word=token, how=how))
+            value, how, matched = index.lookup(token)
+            if not value:
+                continue
+            if how == "fuzzy" and matched in reject_fuzzy:
+                continue
+            # Омонимы («совет», «цвет») проверяются по формам и только после
+            # совпадения: стемминг всех токенов подряд стоил бы времени зря.
+            if any(form in self.guard_forms for form in (token, stem(token))):
+                continue
+            hits.append(Hit(value=value, position=position, word=token, how=how))
         return tuple(hits)
 
 

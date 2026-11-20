@@ -116,6 +116,23 @@ class AmountParsingTest(unittest.TestCase):
         constraints = collect_constraints(find_amounts("нужны 2 кресла"))
         self.assertIsNone(constraints.budget_rub)
 
+    def test_instrumental_thousands(self) -> None:
+        """«располагаю 15 тысячами» — бюджет 15 000, а не 15 (падежная форма)."""
+        constraints = collect_constraints(find_amounts("располагаю 15 тысячами"))
+        self.assertEqual(constraints.budget_rub, 15000)
+
+    def test_bare_unit_after_width_word_is_exact(self) -> None:
+        """«стол шириной метр» — точное значение 100 см (контракт §2.2)."""
+        constraints = collect_constraints(find_amounts("стол шириной метр"))
+        self.assertIsNotNone(constraints.width)
+        self.assertEqual(constraints.width.lower.value, 100)
+        self.assertEqual(constraints.width.upper.value, 100)
+
+    def test_bare_unit_without_width_word_is_ignored(self) -> None:
+        """«уложусь в метр» — не условие о ширине: слова «ширина» рядом нет."""
+        constraints = collect_constraints(find_amounts("кресло и лампа, уложусь в метр"))
+        self.assertIsNone(constraints.width)
+
 
 class TriggerTest(unittest.TestCase):
     """Включительные и строгие границы §2.2."""

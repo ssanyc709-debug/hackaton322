@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
-from typing import Callable
+from typing import Callable, Sequence
 
 from app.model import (
     FIELD_ADJUSTABLE,
@@ -32,6 +32,7 @@ from app.model import (
 from app.nlp.cache import LexiconCache
 from app.nlp.lexicon import get_lexicon, order_categories
 from app.nlp.numbers import (
+    UNIT_RUB,
     collect_constraints,
     find_amounts,
     normalize_text,
@@ -73,6 +74,14 @@ REMOVAL_PATTERNS: tuple[re.Pattern[str], ...] = (
 #: «Добавь ещё», а не «замени всё»: при таких словах категории объединяются с прежними.
 ADDITIVE_PATTERN = re.compile(r"\b(?:еще|также|плюс|вдобавок|добавь|добавьте|дополнительно)\b")
 
+#: Предлоги, после которых слово категории означает МЕСТО, а не товар:
+#: «посветить над столом», «поставить под лампу», «лампа на стол».
+PLACE_PREPOSITIONS: frozenset[str] = frozenset({"над", "под", "на"})
+
+#: Предлоги, с которых может начинаться название города: «в Таганроге», «из Азова».
+#: Используются только как признак «в тексте был город» для решения о вызове модели.
+CITY_PREPOSITIONS: frozenset[str] = frozenset({"в", "во", "из", "около", "рядом", "возле"})
+
 #: Тип resolver-а: реплика + уже известные слоты → частичный результат модели.
 Resolver = Callable[[str, Slots], "dict[str, object] | None"]
 
@@ -101,7 +110,8 @@ def extract_message(
     Алгоритм: нормализация → токенизация → лексикон (город, категории,
     неподдерживаемые слова) → числа и границы → классификация «нейтральных»
     чисел по составу категорий → флаг регулировки регулярным выражением →
-    (опционально) один вызов модели для незакрытых полей → запись в кэш.
+    (опционально) один вызов модели для незакрытых полей, но только если
+    :func:`model_can_help` подтвердил, что она может их закрыть → запись в кэш.
     Сложность: время O(len(text)) на нормализацию и проход по токенам;
     память O(числа токенов). Модель — единственная сетевая операция.
     Почему именно он: lexicon-first даёт 0 токенов на большинстве реплик
@@ -134,7 +144,9 @@ def _lexicon_slots(normalized: str) -> Slots:
 
     city_hits = lexicon.scan_cities(tokens)
     foreign_city_hits = lexicon.scan_unsupported_cities(tokens)
-    category_hits = lexicon.scan_categories(tokens)
+    category_hits = tuple(
+        hit for hit in lexicon.scan_categories(tokens) if not _is_place_use(tokens, hit.position)
+    )
     unsupported_hits = lexicon.scan_unsupported_categories(tokens)
 
     # Явное изменение города внутри реплики: последнее упоминание побеждает.
@@ -204,6 +216,20 @@ def _lexicon_slots(normalized: str) -> Slots:
     )
 
 
+def _is_place_use(tokens: Sequence[str], position: int) -> bool:
+    """Слово категории стоит после предлога места («над столом», «на стол»).
+
+    Зачем: «посветить над столом» — запрос лампы, а не стола; «лампа на стол» —
+    лампа. Предлог даёт роль слова бесплатно, без модели и без разбора смысла.
+    Ложное срабатывание безопасно: категория просто не добавляется, и работает
+    обычный путь — уточнение или (если есть бюджет и город) вызов модели.
+
+    Сложность: O(1). Крайние случаи: слово в начале фразы (position=0) → False;
+    «стол под ноутбук» → False (предлог стоит ПОСЛЕ названия товара).
+    """
+    return position > 0 and tokens[position - 1] in PLACE_PREPOSITIONS
+
+
 def _detect_removals(normalized: str) -> tuple[str, ...]:
     """Находит категории, от которых покупатель отказался в этой реплике.
 
@@ -247,13 +273,17 @@ def _detect_adjustable(normalized: str) -> bool | None:
 def _apply_resolver(slots: Slots, text: str, resolver: Resolver) -> Slots:
     """Дополняет слоты результатом одного вызова модели, не перетирая локальное.
 
-    Исключения клиента модели (:class:`app.llm.client.LlmError`) намеренно
-    НЕ глушатся: сбой внешнего сервиса — это техническая ошибка запуска
+    Перед вызовом проверяется :func:`model_can_help`: если модель всё равно не
+    может закрыть недостающее условие (нет бюджета или не к чему привязать город),
+    вызова нет. Исключения клиента модели (:class:`app.llm.client.LlmError`)
+    намеренно НЕ глушатся: сбой внешнего сервиса — это техническая ошибка запуска
     (stderr + ненулевой код, CONTRACT.md §1), а не повод выдать ``no_match``
     или «уточните заново». Пустой ответ модели (``None``/``{}``) — не ошибка:
     она просто ничего не нашла, и условия остаются пустыми.
     """
     if len(text.encode("utf-8")) > MAX_MODEL_TEXT_BYTES:
+        return slots
+    if not model_can_help(slots, [text]):
         return slots
     raw = resolver(text, slots)
     if not raw:
@@ -304,6 +334,79 @@ def merge_model_slots(slots: Slots, raw: dict[str, object]) -> Slots:
         mentioned=frozenset(mentioned),
         source="model",
     )
+
+
+def model_can_help(slots: Slots, texts: Sequence[str]) -> bool:
+    """CORE. Стоит ли звать модель: может ли она закрыть недостающее условие.
+
+    Зачем: каждый вызов — ≈251 токен и 2–6 с ожидания. Если обязательное условие
+    невозможно вывести из текста, ответ всё равно останется ``clarify``, и вызов
+    не меняет ничего, кроме счёта за токены. Гейт отсекает ровно такие случаи.
+
+    Вход:  slots — условия после слияния всей истории;
+           texts — реплики покупателя (нужны как признаки в тексте).
+
+    Выход: True, если модель может закрыть хотя бы одно недостающее условие.
+
+    Алгоритм (по убыванию ценности):
+      1. все обязательные условия известны → False;
+      2. бюджет неизвестен и в тексте нет признака денег (сумма с «₽» или
+         значение ≥ 1000) → False: брать сумму неоткуда, а «2 кресла» —
+         количество, не бюджет;
+      3. город неизвестен, но назван город вне справочника → False: подставлять
+         другой город нельзя, а справочник закрыт;
+      4. город неизвестен и в тексте нет предлога места («в», «из», «около»…) →
+         False: привязывать фразу к городу не к чему;
+      5. иначе True.
+    Сложность: время O(Σ|text|) на проверку чисел и предлогов, память O(|tokens|).
+    Почему именно он: решение принимается по состоянию слотов и по признакам
+    в тексте, а не по «модель всегда умнее». Это единственный способ гарантировать,
+    что в ответе нет значений, которых покупатель не называл: город и бюджет
+    модель не может выдумать, а разобрать фразу про предмет («деревяшка с
+    четырьмя ножками») — может.
+    Крайние случаи: пустая история → False; известны город и бюджет, не распознаны
+    категории → True (это и есть «деревяшка с четырьмя ножками»); «Хочу мебель» →
+    False (ни города, ни бюджета, и модель их не выдумает); «Нужен стлл» без
+    города и бюджета → False (ответ всё равно ``clarify``); «2 кресла в Азове» →
+    False (число — количество, а не бюджет).
+    Вызывается из: app/nlp/extract.py::_apply_resolver,
+    app/nlp/merge.py::resolve_missing, тесты.
+    """
+    if is_complete(slots):
+        return False
+    if slots.budget_rub is None and not _has_money_evidence(texts):
+        return False
+    if slots.city_id is None:
+        if slots.city_unknown is not None:
+            return False
+        return _city_hint(texts)
+    return True
+
+
+def _has_money_evidence(texts: Sequence[str]) -> bool:
+    """Есть ли в репликах признак денег: валюта рядом с числом или сумма ≥ 1000.
+
+    Мелкое число без валюты — это количество («2 кресла»), а не бюджет;
+    такая «сумма» не даёт модели ничего, что стоило бы вызова.
+    """
+    for text in texts:
+        for amount in find_amounts(normalize_text(text)):
+            if amount.unit == UNIT_RUB or amount.value >= MIN_BUDGET_GUESS:
+                return True
+    return False
+
+
+def _city_hint(texts: Sequence[str]) -> bool:
+    """Есть ли в репликах предлог, с которого начинается название города.
+
+    Слово из справочника сюда не доходит: тогда ``city_id`` уже был бы задан.
+    Остаётся единственный случай, когда модель может связать фразу с городом, —
+    предлог места («в пригороде», «из области»).
+    """
+    for text in texts:
+        if any(token in CITY_PREPOSITIONS for token in tokenize(normalize_text(text))):
+            return True
+    return False
 
 
 def is_complete(slots: Slots) -> bool:

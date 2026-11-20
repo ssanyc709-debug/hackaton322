@@ -23,11 +23,8 @@
 from __future__ import annotations
 
 import json
-import socket
 import sys
 import time
-import urllib.error
-import urllib.request
 from typing import Any, Callable, Mapping, Sequence
 
 from app.config import (
@@ -40,7 +37,7 @@ from app.config import (
     MAX_PRICE_RUB,
     LlmConfig,
 )
-from app.jsonio import JsonError, loads_strict
+from app.jsonio import JsonError, json_from, loads_strict
 from app.model import CATEGORIES, Slots
 from app.nlp.extract import Resolver
 from app.prompt_safety import EXTRACTION_SCHEMA, EXTRACTION_SCHEMA_NAME, SYSTEM_PROMPT
@@ -74,8 +71,8 @@ class LlmError(RuntimeError):
 
     ``status`` — HTTP-код, если ответ пришёл; ``kind`` — короткая категория
     причины для диагностики (``transport``, ``deadline``, ``request_too_large``,
-    ``rate_limited``, ``access``, ``non_json``, ``model_output``, ``config``).
-    Текст сообщения уже очищен от ключа доступа.
+    ``rate_limited``, ``access``, ``non_json``, ``model_output``, ``truncated``,
+    ``config``). Текст сообщения уже очищен от ключа доступа.
     """
 
     def __init__(self, message: str, *, status: int | None = None, kind: str = "transport") -> None:
@@ -84,14 +81,29 @@ class LlmError(RuntimeError):
         self.kind = kind
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Запрещает автоматические редиректы: ключ не должен уйти на чужой хост."""
-
-    def redirect_request(self, request, fp, code, message, headers, newurl):  # noqa: ANN001, D401
-        return None
+#: Opener без редиректов; создаётся при первом вызове модели (см. :func:`_build_opener`).
+_OPENER: Any = None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+def _build_opener() -> Any:
+    """Opener urllib, запрещающий редиректы; импорт — при первом вызове модели.
+
+    ``urllib.request`` стоит ≈53 мс старта процесса, а нужен только когда модель
+    действительно вызывается (38 % запросов на стенде). Импорт внутри функции
+    переносит эту цену на платный путь и не влияет на быстрый.
+    """
+    global _OPENER
+    if _OPENER is None:
+        import urllib.request
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            """Запрещает автоматические редиректы: ключ не должен уйти на чужой хост."""
+
+            def redirect_request(self, request, fp, code, message, headers, newurl):  # noqa: ANN001, D401
+                return None
+
+        _OPENER = urllib.request.build_opener(_NoRedirect)
+    return _OPENER
 
 
 def build_payload(
@@ -306,10 +318,16 @@ def _http_post(
 
     Сетевые сбои (DNS, TLS, таймаут, обрыв) — :class:`LlmError` с ``transport``:
     повтор запрещён, потому что судьба исходного вызова неизвестна.
+    ``urllib`` импортируется здесь, а не на уровне модуля: это ≈53 мс старта,
+    которые не нужны запросам без модели.
     """
+    import socket
+    import urllib.error
+    import urllib.request
+
     request = urllib.request.Request(url, data=payload, headers=dict(headers), method="POST")
     try:
-        with _OPENER.open(request, timeout=timeout) as response:
+        with _build_opener().open(request, timeout=timeout) as response:
             return response.status, dict(response.headers.items()), response.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as error:
         try:
@@ -341,21 +359,38 @@ def _parse_envelope(body: bytes, api_key: str) -> dict[str, Any]:
 
 
 def _extraction_content(envelope: Mapping[str, Any]) -> dict[str, Any]:
-    """Достаёт JSON модели из ``choices[0].message.content`` и фильтрует поля."""
+    """Достаёт JSON модели из ``choices[0].message.content`` и фильтрует поля.
+
+    Разбор терпим к обрамлению (markdown-забор, проза до/после, служебные
+    токены) — см. :func:`app.jsonio.json_from` — но не к самому JSON: NaN,
+    дубли ключей и массив вместо объекта остаются ошибкой. Если объектов
+    несколько, берётся первый, из которого после белого списка осталось хоть
+    одно поле: ``{"error":"x"}{"city_id":…}`` не должен превращаться в пустой
+    набор условий.
+
+    Обрезка по лимиту выхода и «модель промолчала» различаются: ``finish_reason``
+    ``length`` — это ``truncated`` (лечится увеличением ``max_tokens``), а
+    остальное — ``model_output`` (модель не вернула объект).
+    """
     choices = envelope.get("choices")
     if not isinstance(choices, list) or not choices:
         raise LlmError("в ответе модели нет choices", kind="protocol")
     first = choices[0]
     message = first.get("message") if isinstance(first, dict) else None
     content = message.get("content") if isinstance(message, dict) else None
+    finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
     if not isinstance(content, str) or not content.strip():
         raise LlmError("в ответе модели нет текста message.content", kind="protocol")
     try:
-        raw = loads_strict(content, source="choices[0].message.content")
+        raw = json_from(
+            content,
+            source="choices[0].message.content",
+            accept=lambda candidate: bool(_sanitize_slots(candidate)),
+        )
     except JsonError as exc:
-        raise LlmError(f"содержимое ответа не JSON: {exc}", kind="model_output") from exc
-    if not isinstance(raw, dict):
-        raise LlmError("содержимое ответа не объект JSON", kind="model_output")
+        kind = "truncated" if finish_reason == "length" else "model_output"
+        hint = " (ответ модели обрезан по max_tokens)" if kind == "truncated" else ""
+        raise LlmError(f"содержимое ответа не JSON{hint}: {exc}", kind=kind) from exc
     return _sanitize_slots(raw)
 
 

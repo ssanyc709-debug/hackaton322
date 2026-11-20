@@ -21,7 +21,7 @@ from app.nlp.numbers import normalize_text
 #: Версия формата файла кэша.
 CACHE_FORMAT_VERSION = 1
 #: Версия лексикона: при изменении словарей старые разборы недействительны.
-LEXICON_VERSION = 1
+LEXICON_VERSION = 3
 #: Имя файла кэша разборов.
 CACHE_FILE_NAME = "lexicon.json"
 #: Предел числа записей: при переполнении половина старых отбрасывается.

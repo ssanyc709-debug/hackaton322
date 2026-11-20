@@ -36,14 +36,25 @@ MODEL = "google/gemma-4-31B-it"
 API_KEY = "test-key-0123456789"
 
 
-def envelope(content: dict[str, Any] | str, usage: dict[str, int] | None = None) -> bytes:
+def envelope(
+    content: dict[str, Any] | str,
+    usage: dict[str, int] | None = None,
+    *,
+    finish_reason: str = "stop",
+) -> bytes:
     """Оболочка Chat Completions: JSON модели лежит СТРОКОЙ в message.content."""
     text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
     payload = {
         "id": "chatcmpl-test",
         "object": "chat.completion",
         "model": MODEL,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": finish_reason,
+            }
+        ],
         "usage": usage or {"prompt_tokens": 210, "completion_tokens": 18, "total_tokens": 228},
     }
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -239,6 +250,31 @@ class ModelOutputTest(GatewayTestCase):
     def test_content_is_parsed_as_json_string(self) -> None:
         self.gateway.enqueue(200, envelope('  {"city_id":"azov","budget_rub":9000,"categories":[]}  '))
         self.assertEqual(self.call(), {"city_id": "azov", "budget_rub": 9000})
+
+    def test_markdown_wrapped_content_is_parsed(self) -> None:
+        """Обёртка ```json … ``` не должна стоить потраченных токенов (блок 9)."""
+        wrapped = '```json\n{"city_id":"azov","budget_rub":9000,"categories":["table"]}\n```'
+        self.gateway.enqueue(200, envelope(wrapped))
+        self.assertEqual(
+            self.call(),
+            {"city_id": "azov", "budget_rub": 9000, "categories": ["table"]},
+        )
+
+    def test_usable_object_wins_over_service_object(self) -> None:
+        """``{"error":…}{…}``: берётся объект с полями, а не первый попавшийся."""
+        text = '{"error":"не смог"}{"city_id":"azov","budget_rub":9000}'
+        self.gateway.enqueue(200, envelope(text))
+        self.assertEqual(self.call(), {"city_id": "azov", "budget_rub": 9000})
+
+    def test_truncated_output_is_reported_separately(self) -> None:
+        """Обрезка по max_tokens — ``truncated``, а не «модель промолчала»."""
+        self.gateway.enqueue(
+            200, envelope('{"city_id":"azov","budget_rub":9', finish_reason="length")
+        )
+        with self.assertRaises(LlmError) as caught:
+            self.call()
+        self.assertEqual(caught.exception.kind, "truncated")
+        self.assertIn("max_tokens", str(caught.exception))
 
     def test_invalid_json_content(self) -> None:
         self.gateway.enqueue(200, envelope("не JSON вовсе"))
@@ -438,8 +474,9 @@ class CliModelPathTest(unittest.TestCase):
         )
 
     def request(self) -> dict[str, Any]:
-        # Лексикон не может определить условия: без модели ответ был бы clarify.
-        return {"messages": [{"role": "user", "text": "Хочу обставить кабинет, помогите"}]}
+        # Город и бюджет названы, предмет — нет: без модели ответ был бы clarify,
+        # а модель может назвать категорию (блок 9: гейт пропускает этот случай).
+        return {"messages": [{"role": "user", "text": "Хочу обставить кабинет в Таганроге, тысяч на двенадцать"}]}
 
     def test_model_completes_the_request(self) -> None:
         self.gateway.enqueue(

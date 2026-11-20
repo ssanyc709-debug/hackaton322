@@ -25,8 +25,8 @@ from app.nlp.extract import (
     MAX_MODEL_TEXT_BYTES,
     Resolver,
     extract_message,
-    is_complete,
     merge_model_slots,
+    model_can_help,
 )
 from app.nlp.lexicon import order_categories
 
@@ -59,8 +59,9 @@ def merge_history(
     при слове «ещё/также/добавь», отказанные категории удаляются, ограничения
     по характеристикам заменяются. Неназванные поля сохраняются.
     Модель подключается ОДИН раз на запрос и только если после слияния всей
-    истории обязательные условия всё ещё не закрыты (§5): реплика «12 тысяч»
-    сама по себе не содержит города, но вместе с предыдущей даёт полный набор,
+    истории обязательные условия всё ещё не закрыты (§5) И модель физически
+    способна их закрыть (:func:`model_can_help`): реплика «12 тысяч» сама по
+    себе не содержит города, но вместе с предыдущей даёт полный набор,
     поэтому вызов модели здесь был бы лишним расходом токенов.
     Сложность: время O(сумма длин реплик) + O(1) на слияние шага; память O(1).
     Почему именно он: свёртка даёт ровно семантику «последнее явное упоминание
@@ -79,7 +80,7 @@ def merge_history(
         # принимается ниже — по СОСТОЯНИЮ ПОСЛЕ всей истории, а не по одной реплике.
         step = extract_message(text, cache=cache, resolver=None, allow_model=False)
         state = merge_step(state, step)
-    if resolver is not None and allow_model and not is_complete(state):
+    if resolver is not None and allow_model:
         state = resolve_missing(state, user_texts, resolver)
     return state
 
@@ -116,7 +117,8 @@ def resolve_missing(state: Slots, user_texts: Sequence[str], resolver: Resolver)
            resolver   — клиент модели (``app.llm.client.make_resolver``).
     Выход: слоты, дополненные тем, что нашла модель; при пустом ответе — те же.
 
-    Алгоритм: склейка диалога (:func:`dialogue_text`) → один вызов resolver →
+    Алгоритм: гейт :func:`model_can_help` (можно ли вообще закрыть недостающее) →
+    склейка диалога (:func:`dialogue_text`) → один вызов resolver →
     :func:`merge_model_slots` (локальные значения не перетираются, город
     проверяется по справочнику). Ошибка клиента не глушится: это техническая
     ошибка запуска (CONTRACT.md §1), а не повод выдать ``no_match``.
@@ -124,10 +126,16 @@ def resolve_missing(state: Slots, user_texts: Sequence[str], resolver: Resolver)
     Почему именно он: решение «звать ли модель» принимается там, где видна вся
     история, — в слиянии; поэтому диалог «Стол в Таганроге» + «12 тысяч» стоит
     0 токенов, хотя ни одна его реплика по отдельности условий не закрывает.
-    Крайние случаи: пустой текст → вызова нет; непустой ответ модели без нужных
-    полей → условия остаются как были (дальше ``clarify``).
+    Гейт делает следующий шаг: если бюджет не назван вовсе (чисел в тексте нет)
+    или город не к чему привязать, вызов не состоится — модель не может
+    придумать условие, которого покупатель не называл.
+    Крайние случаи: пустой текст → вызова нет; все условия известны → False
+    из гейта; непустой ответ модели без нужных полей → условия остаются как
+    были (дальше ``clarify``).
     Вызывается из: app/nlp/merge.py::merge_history, тесты, bench/load.py.
     """
+    if not model_can_help(state, user_texts):
+        return state
     text = dialogue_text(user_texts)
     if not text:
         return state

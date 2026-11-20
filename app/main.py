@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-import traceback
 from pathlib import Path
 from typing import Sequence
 
@@ -160,6 +159,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         log(f"самопроверка ответа не пройдена: {exc}")
         return EXIT_INTERNAL
     except Exception:  # noqa: BLE001 — любая ошибка ядра обязана стать кодом 5, а не no_match
+        import traceback
+
         log("внутренняя ошибка пайплайна:\n" + traceback.format_exc())
         return EXIT_INTERNAL
 

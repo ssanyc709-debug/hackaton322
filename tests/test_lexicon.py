@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from app.nlp.lexicon import (
+    CATEGORY_WORDS,
     Lexicon,
     candidate_forms,
     get_lexicon,
@@ -14,6 +16,7 @@ from app.nlp.lexicon import (
     trigrams,
 )
 from app.nlp.numbers import normalize_text, tokenize
+from tests.support import CATALOG_PATH
 
 
 def scan(text: str) -> tuple[str, ...]:
@@ -143,9 +146,87 @@ class LexiconLookupTest(unittest.TestCase):
         """«лом» не должен превращаться в «стол» — слишком короткое слово."""
         self.assertEqual(self.categories("лом"), ())
 
-    def test_light_stopword_guard(self) -> None:
-        """«свет» — не категория: иначе «выключи свет» подбирал бы лампу."""
-        self.assertEqual(self.categories("нужен свет"), ())
+    def test_light_words_mean_a_lamp(self) -> None:
+        """«Посветить», «осветить», «освещение», «свет» — это запрос лампы (блок 9)."""
+        for text in ("посветить", "осветить", "освещение", "нужен свет", "чем посветить над столом"):
+            with self.subTest(text=text):
+                self.assertIn("lamp", self.categories(text))
+
+    def test_light_adjectives_are_not_a_lamp(self) -> None:
+        """«Светлый стол» — про цвет, а не про лампу."""
+        self.assertEqual(self.categories("нужен светлый стол"), ("table",))
+        self.assertEqual(self.categories("светло-серый стол"), ("table",))
+
+    def test_light_homonyms_are_not_a_lamp(self) -> None:
+        """«Совет», «ответ», «цвет», «освежить» — соседние слова, не лампа."""
+        for text in ("нужен совет", "жду ответ", "какого цвета", "освежить комнату"):
+            with self.subTest(text=text):
+                self.assertEqual(self.categories(text), ())
+
+    def test_category_adjective_is_not_a_typo(self) -> None:
+        """fuzzy до прилагательного не делает товар: «за работой» — не рабочий стол."""
+        self.assertEqual(self.categories("сидеть за работой"), ())
+        self.assertEqual(self.categories("рабочий стол"), ("table",))
+
+    def test_typo_of_a_noun_is_still_recognised(self) -> None:
+        self.assertEqual(self.categories("нужен стлл"), ("table",))
+
+    def test_short_homonyms_are_not_categories(self) -> None:
+        """Нечёткое совпадение коротких слов не должно создавать товар.
+
+        «пара» → «парта», «скол» → «стол», «след» → «седло», «краска» →
+        «кресло», «стоял» → «стол» (через стем «сто»). Эти слова встречаются
+        в описаниях каталога, поэтому защита проверяется по корпусу ниже.
+        """
+        cases = {
+            "покажи пару вариантов": (),
+            "а есть что-то подешевле, пару штук": (),
+            "тут скол на ножке": (),
+            "на стойке регистрации": (),
+            "тут след от ноги": (),
+            "краска облезла": (),
+            "стол стоял у окна": ("table",),
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(self.categories(text), expected)
+
+    def test_catalog_vocabulary_does_not_name_extra_categories(self) -> None:
+        """Свип по словарю каталога: чужие слова не становятся товаром.
+
+        Все уникальные слова из ``title``/``description`` учебного каталога
+        прогоняются через лексикон. Словоформы самих названий категорий
+        («столом», «компьютера», «подсветку») ожидаемы и отбрасываются; всё
+        остальное должно быть пусто. Два случая ожидаемы и зафиксированы ниже:
+        «освещает» и «светит» — это лампа по смыслу.
+        """
+        catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+        vocabulary: set[str] = set()
+        for listing in catalog:
+            for field in ("title", "description"):
+                vocabulary.update(tokenize(normalize_text(listing.get(field) or "")))
+
+        own_forms: set[str] = set()
+        for forms in CATEGORY_WORDS.values():
+            for form in forms:
+                own_forms.update(candidate_forms(form))
+
+        matches: dict[str, tuple[str, ...]] = {}
+        for word in sorted(vocabulary):
+            if len(word) < 3 or not word.isalpha():
+                continue
+            if any(form in own_forms for form in candidate_forms(word)):
+                continue  # словоформа названия категории — ожидаемо
+            hits = self.lexicon.scan_categories((word,))
+            if hits:
+                matches[word] = tuple(hit.value for hit in hits)
+
+        self.assertEqual(
+            matches,
+            {"освещает": ("lamp",), "светит": ("lamp",)},
+            "слово из каталога стало категорией; если оно действительно означает "
+            "товар — добавьте его в CATEGORY_WORDS, иначе в GUARD_WORDS",
+        )
 
     def test_order_is_canonical(self) -> None:
         self.assertEqual(order_categories(["lamp", "table", "chair", "table"]),

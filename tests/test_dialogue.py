@@ -114,18 +114,24 @@ class ModelCallPolicyTest(unittest.TestCase):
         self.assertEqual(slots.categories, ("table", "chair"))
 
     def test_one_call_for_the_whole_dialogue(self) -> None:
-        """Три реплики без бюджета — ровно один вызов, и в нём весь диалог."""
+        """Две реплики, условия закрывает только их сумма — ровно один вызов."""
         slots = merge_history(
-            ["Хочу обставить кабинет", "Стол, кресло и лампа", "Таганрог"],
+            ["Хочу обставить кабинет в Таганроге", "12 тысяч"],
             resolver=self.resolver,
         )
         self.assertEqual(len(self.calls), 1)
+        self.assertEqual(slots.city_id, "taganrog")
         self.assertEqual(slots.budget_rub, 12000)
-        self.assertIn("Хочу обставить кабинет", self.calls[0])
-        self.assertIn("Таганрог", self.calls[0])
+        self.assertIn("Хочу обставить кабинет в Таганроге", self.calls[0])
+        self.assertIn("12 тысяч", self.calls[0])
 
     def test_no_call_in_offline_mode(self) -> None:
         merge_history(["Хочу мебель"], resolver=self.resolver, allow_model=False)
+        self.assertEqual(self.calls, [])
+
+    def test_no_call_when_history_has_no_material_for_the_model(self) -> None:
+        """Ни города, ни бюджета: модель не выдумает их, вызов ничего не изменит."""
+        merge_history(["Хочу мебель"], resolver=self.resolver)
         self.assertEqual(self.calls, [])
 
     def test_model_error_is_not_swallowed(self) -> None:
@@ -133,7 +139,7 @@ class ModelCallPolicyTest(unittest.TestCase):
             raise TimeoutError("шлюз не ответил")
 
         with self.assertRaises(TimeoutError):
-            merge_history(["Хочу мебель"], resolver=broken)
+            merge_history(["Нужна деревяшка", "Таганрог", "15 тысяч"], resolver=broken)
 
     def test_long_dialogue_falls_back_to_last_message(self) -> None:
         """История длиннее предела модели: в один вызов уходит последняя реплика."""
