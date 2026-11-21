@@ -1,0 +1,62 @@
+<!doctype html>
+<!-- buyer-assistant-demo -->
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Демо ИИ-помощника покупателя: подбор комплекта мебели по запросу на русском с показом стоимости и объяснения.">
+  <title>ИИ-помощник покупателя</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true">ИИ</span>
+      <div>
+        <h1 class="brand__title">Помощник покупателя</h1>
+        <p class="brand__subtitle">подбор комплекта мебели по запросу на русском</p>
+      </div>
+    </div>
+    <p class="status" id="status" role="status" aria-live="polite">готов к работе</p>
+  </header>
+
+  <main class="layout">
+    <section class="panel" aria-labelledby="chat-title">
+      <h2 class="panel__title" id="chat-title">Диалог</h2>
+
+      <ol class="chat" id="chat" aria-label="История диалога" aria-live="polite" aria-relevant="additions"></ol>
+
+      <form class="composer" id="composer">
+        <label class="visually-hidden" for="input">Ваш запрос</label>
+        <textarea id="input" name="input" rows="2" required
+          placeholder="Например: стол, кресло и лампа. Таганрог. До 15000."></textarea>
+        <p class="composer__warning" id="input-warning">
+          Обычно ответ мгновенный. Запросы, где нужна языковая модель, занимают до 30 секунд.
+        </p>
+        <div class="composer__actions">
+          <button type="submit" class="button" id="send">Подобрать</button>
+          <button type="button" class="button button--ghost" id="new-dialog">Новый диалог</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel" aria-labelledby="answer-title">
+      <div class="examples" aria-labelledby="examples-title">
+        <h2 class="panel__title" id="examples-title">Примеры запросов</h2>
+        <div class="examples__grid" id="examples"></div>
+        <p class="examples__note">
+          Первые три примера разбираются лексиконом без вызова модели. Четвёртый —
+          нарочно непонятный («деревяшка»): его отправляем модели.
+        </p>
+      </div>
+
+      <h2 class="panel__title" id="answer-title">Варианты</h2>
+      <div class="answer" id="answer" aria-live="polite">
+        <p class="placeholder">Здесь появятся варианты комплекта, уточняющие вопросы или спокойное объяснение, почему подобрать не удалось.</p>
+      </div>
+      <p class="metrics" id="metrics" hidden></p>
+    </section>
+  </main>
+</body>
+</html>
