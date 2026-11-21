@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from app.config import MAX_OPTIONS, MAX_PRICE_RUB, MIN_PRICE_RUB, SCHEMA_DIR
+from app.config import MAX_OPTIONS, MIN_PRICE_RUB, SCHEMA_DIR
 
 STATUS_OK = "ok"
 STATUS_CLARIFY = "clarify"
@@ -181,7 +181,7 @@ def _validate_ok(doc: dict[str, Any]) -> None:
         total = item["total_rub"]
         if isinstance(total, bool) or not isinstance(total, int):
             raise ResponseError(f"вариант #{index}: total_rub должен быть целым числом")
-        if not MIN_PRICE_RUB <= total <= MAX_PRICE_RUB:
+        if total < MIN_PRICE_RUB:
             raise ResponseError(f"вариант #{index}: total_rub вне допустимого диапазона: {total}")
 
         explanation = item["explanation"]

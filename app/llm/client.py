@@ -110,6 +110,9 @@ def build_payload(
     config: LlmConfig,
     messages: Sequence[Mapping[str, str]],
     max_tokens: int = LLM_MAX_OUTPUT_TOKENS,
+    *,
+    schema: Mapping[str, Any] = EXTRACTION_SCHEMA,
+    schema_name: str = EXTRACTION_SCHEMA_NAME,
 ) -> bytes:
     """CORE. Собирает тело запроса и проверяет лимиты шлюза ДО отправки.
 
@@ -137,7 +140,10 @@ def build_payload(
         raise LlmError(f"max_tokens вне диапазона 1..{MAX_OUTPUT_TOKENS}: {max_tokens!r}", kind="request_too_large")
     if not 1 <= len(messages) <= MAX_MESSAGES:
         raise LlmError(f"сообщений должно быть 1..{MAX_MESSAGES}, получено {len(messages)}", kind="request_too_large")
-    if _SCHEMA_BYTES > MAX_SCHEMA_BYTES:
+    schema_bytes = _SCHEMA_BYTES if schema is EXTRACTION_SCHEMA else len(
+        json.dumps(schema, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    if schema_bytes > MAX_SCHEMA_BYTES:
         raise LlmError(f"схема генерации больше {MAX_SCHEMA_BYTES} байт", kind="request_too_large")
 
     normalized: list[dict[str, str]] = []
@@ -165,9 +171,9 @@ def build_payload(
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "name": EXTRACTION_SCHEMA_NAME,
+                "name": schema_name,
                 "strict": True,
-                "schema": EXTRACTION_SCHEMA,
+                "schema": schema,
             },
         },
     }
@@ -187,6 +193,9 @@ def complete(
     *,
     max_tokens: int = LLM_MAX_OUTPUT_TOKENS,
     sleep: Callable[[float], None] = time.sleep,
+    schema: Mapping[str, Any] = EXTRACTION_SCHEMA,
+    schema_name: str = EXTRACTION_SCHEMA_NAME,
+    sanitize: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """CORE. Один вызов модели: запрос, разбор оболочки, JSON модели, лимит времени.
 
@@ -223,7 +232,7 @@ def complete(
             kind="config",
         )
 
-    payload = build_payload(config, messages, max_tokens)
+    payload = build_payload(config, messages, max_tokens, schema=schema, schema_name=schema_name)
     url = f"{config.base_url}/chat/completions"
     headers = _headers(config)
 
@@ -236,7 +245,7 @@ def complete(
         if status == 200:
             envelope = _parse_envelope(body, config.api_key)
             _log_usage(envelope)
-            return _extraction_content(envelope)
+            return _extraction_content(envelope, sanitize or _sanitize_slots)
 
         error = _error_from_response(status, body, config.api_key, attempts)
         if status == 429 and attempts <= LLM_RATE_LIMIT_MAX_RETRIES:
@@ -358,7 +367,10 @@ def _parse_envelope(body: bytes, api_key: str) -> dict[str, Any]:
     return envelope
 
 
-def _extraction_content(envelope: Mapping[str, Any]) -> dict[str, Any]:
+def _extraction_content(
+    envelope: Mapping[str, Any],
+    sanitize: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Достаёт JSON модели из ``choices[0].message.content`` и фильтрует поля.
 
     Разбор терпим к обрамлению (markdown-забор, проза до/после, служебные
@@ -379,19 +391,20 @@ def _extraction_content(envelope: Mapping[str, Any]) -> dict[str, Any]:
     message = first.get("message") if isinstance(first, dict) else None
     content = message.get("content") if isinstance(message, dict) else None
     finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
+    sanitize = sanitize or _sanitize_slots
     if not isinstance(content, str) or not content.strip():
         raise LlmError("в ответе модели нет текста message.content", kind="protocol")
     try:
         raw = json_from(
             content,
             source="choices[0].message.content",
-            accept=lambda candidate: bool(_sanitize_slots(candidate)),
+            accept=lambda candidate: bool(sanitize(candidate)),
         )
     except JsonError as exc:
         kind = "truncated" if finish_reason == "length" else "model_output"
         hint = " (ответ модели обрезан по max_tokens)" if kind == "truncated" else ""
         raise LlmError(f"содержимое ответа не JSON{hint}: {exc}", kind=kind) from exc
-    return _sanitize_slots(raw)
+    return sanitize(raw)
 
 
 def _sanitize_slots(raw: Mapping[str, Any]) -> dict[str, Any]:

@@ -18,11 +18,13 @@ from typing import Sequence
 from app import config
 from app.catalog import CatalogError, read_catalog_document
 from app.catalog.index import CatalogIndex, get_index
+from app.catalog.text_search import TextCatalog
 from app.contract import response
 from app.contract.request import RequestError, parse_request
 from app.contract.response import ResponseError
 from app.jsonio import JsonError, loads_strict
 from app.llm.client import LlmError, make_resolver
+from app.llm.product import make_product_resolver
 from app.nlp.cache import LexiconCache
 from app.pipeline import answer
 from app.prompt_safety import audit_catalog
@@ -49,6 +51,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="ИИ-помощник покупателя: один JSON-запрос из stdin, один JSON-ответ в stdout.",
     )
     parser.add_argument("--catalog", required=True, help="путь к catalog.json текущего запуска")
+    parser.add_argument("--text-search", action="store_true", help="искать по названиям товаров без таксономии")
     parser.add_argument("--env-file", default=None, help="альтернативный .env (по умолчанию <repo>/.env)")
     parser.add_argument("--debug", action="store_true", help="подробная трассировка этапов в stderr")
     return parser
@@ -99,17 +102,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     stage = time.monotonic()
     try:
-        catalog = read_catalog_document(catalog_path)
-        index = get_index(catalog, cache_dir=settings.cache_dir)
+        if args.text_search:
+            index = TextCatalog.load(catalog_path)
+        else:
+            catalog = read_catalog_document(catalog_path)
+            index = get_index(catalog, cache_dir=settings.cache_dir)
     except CatalogError as exc:
         log(f"каталог: {exc}")
         return EXIT_CATALOG
-    log(
-        f"каталог: {index.size} объявлений, {len(index.buckets)} пар (город, категория), "
-        f"дайджест {index.digest[:12]}, кэш={'hit' if index.from_cache else 'miss'}, "
-        f"индекс за {_ms(stage)} мс"
-    )
-    _report_injections(index)
+    if isinstance(index, TextCatalog):
+        log(f"каталог: {len(index.products)} товаров, текстовый индекс за {_ms(stage)} мс")
+    else:
+        log(
+            f"каталог: {index.size} объявлений, {len(index.buckets)} пар (город, категория), "
+            f"дайджест {index.digest[:12]}, кэш={'hit' if index.from_cache else 'miss'}, "
+            f"индекс за {_ms(stage)} мс"
+        )
+        _report_injections(index)
 
     try:
         raw = sys.stdin.buffer.read()
@@ -139,18 +148,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     log(f"запрос: {len(request.messages)} сообщений, разобран за {_ms(stage)} мс")
 
     stage = time.monotonic()
-    resolver = make_resolver(settings.llm, deadline) if settings.llm_available else None
-    if resolver is None:
+    if not settings.llm_available:
         log("модель: недоступна (офлайн-режим или нет ключа), разбор только лексиконом")
     try:
-        document = answer(
-            request=request,
-            index=index,
-            settings=settings,
-            deadline=deadline,
-            cache=LexiconCache(settings.cache_dir, enabled=not settings.offline_cache_disabled),
-            resolver=resolver,
-        )
+        if isinstance(index, TextCatalog):
+            product_resolver = make_product_resolver(settings.llm, deadline) if settings.llm_available else None
+            document = index.answer(request.user_texts, resolver=product_resolver)
+        else:
+            resolver = make_resolver(settings.llm, deadline) if settings.llm_available else None
+            document = answer(
+                request=request,
+                index=index,
+                settings=settings,
+                deadline=deadline,
+                cache=LexiconCache(settings.cache_dir, enabled=not settings.offline_cache_disabled),
+                resolver=resolver,
+            )
         rendered = response.finalize(document)
     except LlmError as exc:
         log(f"модель: {exc.kind}: {exc}")

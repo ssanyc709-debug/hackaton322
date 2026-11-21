@@ -138,6 +138,9 @@ class Catalog:
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"каталог не читается: {exc}") from exc
         if not isinstance(document, list):
+            if isinstance(document, dict):
+                document = document.get("listings", document.get("products"))
+        if not isinstance(document, list):
             raise RuntimeError("каталог должен быть JSON-массивом объявлений")
 
         by_id: dict[str, dict[str, Any]] = {}
@@ -174,12 +177,17 @@ class Catalog:
         if not isinstance(listing_id, str) or not listing_id:
             return None
         attributes = raw.get("attributes")
+        title = raw.get("title", raw.get("name"))
+        price = raw.get("price_rub", raw.get("price"))
+        city = raw.get("city_id", raw.get("city"))
+        city_name = raw.get("city_name", raw.get("city"))
         return {
             "id": listing_id,
             "category": raw.get("category") if isinstance(raw.get("category"), str) else "",
-            "title": raw.get("title") if isinstance(raw.get("title"), str) else "",
-            "price_rub": raw.get("price_rub") if isinstance(raw.get("price_rub"), int) else 0,
-            "city_id": raw.get("city_id") if isinstance(raw.get("city_id"), str) else "",
+            "title": title if isinstance(title, str) else "",
+            "price_rub": price if type(price) is int else 0,
+            "city_id": city if isinstance(city, str) else "",
+            "city_name": city_name if isinstance(city_name, str) else "",
             "attributes": attributes if isinstance(attributes, dict) else {},
         }
 
@@ -195,7 +203,7 @@ class Catalog:
                 continue
             enriched = dict(card)
             enriched["category_name"] = self._categories.get(card["category"], card["category"])
-            enriched["city_name"] = self._cities.get(card["city_id"], card["city_id"])
+            enriched["city_name"] = self._cities.get(card["city_id"], card["city_name"] or card["city_id"])
             items.append(enriched)
         return items, missing
 
@@ -259,7 +267,7 @@ def backend_metrics(stderr: bytes) -> dict[str, Any]:
 
 
 def call_backend(
-    payload: dict[str, Any], catalog_path: Path, env: dict[str, str]
+    payload: dict[str, Any], catalog_path: Path, env: dict[str, str], *, text_search: bool = False,
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
     """CORE. Один запрос диалога → ответ бэкенда как есть.
 
@@ -279,6 +287,8 @@ def call_backend(
         "--catalog",
         str(catalog_path),
     ]
+    if text_search:
+        command.append("--text-search")
     try:
         with BACKEND_LOCK:
             completed = subprocess.run(
@@ -379,10 +389,11 @@ def validate_request_body(raw: bytes) -> tuple[dict[str, Any] | None, dict[str, 
 class Api:
     """Состояние сервера: каталог, путь к нему и режим офлайна."""
 
-    def __init__(self, catalog: Catalog, catalog_path: Path, offline: bool) -> None:
+    def __init__(self, catalog: Catalog, catalog_path: Path, offline: bool, *, text_search: bool = False) -> None:
         self.catalog = catalog
         self.catalog_path = catalog_path
         self.offline = offline
+        self.text_search = text_search
         self.env = backend_env(offline)
         self.catalog_ok = True
         self.catalog_error: str | None = None
@@ -418,7 +429,7 @@ class Api:
         if error is not None:
             return 400, error, {}
         assert payload is not None
-        return call_backend(payload, self.catalog_path, self.env)
+        return call_backend(payload, self.catalog_path, self.env, text_search=self.text_search)
 
 
 def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
@@ -629,7 +640,7 @@ def make_server(api: Api, host: str = "127.0.0.1", port: int = 8000) -> WebServe
     return WebServer((host, port), make_handler(api), api)
 
 
-def build_api(catalog_path: Path, offline: bool) -> Api:
+def build_api(catalog_path: Path, offline: bool, *, text_search: bool = False) -> Api:
     """Собирает состояние сервера.
 
     Недоступный или битый каталог НЕ мешает старту: сервер страны обязан
@@ -638,7 +649,7 @@ def build_api(catalog_path: Path, offline: bool) -> Api:
     (500), и при вызове бэкенда (502 от ``app.main``).
     """
     catalog = Catalog(catalog_path)
-    api = Api(catalog, catalog_path, offline)
+    api = Api(catalog, catalog_path, offline, text_search=text_search)
     try:
         catalog._reload_if_changed()
     except RuntimeError as exc:
@@ -654,6 +665,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8000, help="порт; 0 — любой свободный")
     parser.add_argument("--catalog", default=str(DEFAULT_CATALOG), help="путь к catalog.json (по умолчанию data/catalog.json)")
     parser.add_argument("--offline", action="store_true", help="выставить ASSISTANT_OFFLINE=1 процессу бэкенда")
+    parser.add_argument("--text-search", action="store_true", help="искать по названиям товаров без таксономии")
     return parser
 
 
@@ -670,7 +682,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     catalog_path = Path(args.catalog).expanduser().resolve()
 
-    api = build_api(catalog_path, args.offline)
+    api = build_api(catalog_path, args.offline, text_search=args.text_search)
 
     try:
         server = make_server(api, args.host, args.port)
