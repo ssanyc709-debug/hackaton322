@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import unittest
 from pathlib import Path
@@ -145,6 +146,51 @@ class ReadmeTest(unittest.TestCase):
         for line in example.splitlines():
             if line.startswith("LLM_API_KEY="):
                 self.assertEqual(line.strip(), "LLM_API_KEY=", "в .env.example не должно быть ключа")
+
+
+class AccuracyDocumentTest(unittest.TestCase):
+    """``docs/ACCURACY.md``: цифры в документе — из набора, а не «на глаз».
+
+    Метрика бессмысленна, если документ с числом живёт отдельно от набора: набор
+    пополнили, а в отчёте осталась старая точность. Поэтому размер набора и
+    результат берутся из тех же файлов, что читает стенд.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.path = REPO_ROOT / "docs" / "ACCURACY.md"
+        cls.text = cls.path.read_text(encoding="utf-8") if cls.path.is_file() else ""
+
+    def test_document_exists(self) -> None:
+        self.assertTrue(self.path.is_file(), "docs/ACCURACY.md отсутствует")
+        self.assertIn("# Точность извлечения условий", self.text)
+
+    def test_size_matches_the_golden_set(self) -> None:
+        from bench.accuracy import load_golden
+
+        examples = load_golden()
+        self.assertIn(
+            f"{len(examples)} размеченных реплик",
+            self.text,
+            "в документе не тот размер набора: обновите docs/ACCURACY.md",
+        )
+
+    def test_baseline_is_described_and_frozen(self) -> None:
+        from bench.accuracy import BASELINE_PATH
+
+        self.assertIn("baseline.json", self.text)
+        self.assertTrue(BASELINE_PATH.is_file(), "нет замороженных цифр — регресс не поймать")
+        baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+        self.assertIn(str(baseline["full_match"]), self.text, "в документе не тот результат")
+
+    def test_weights_are_documented(self) -> None:
+        for kind in ("wrong_ok", "wrong_value", "false_negative", "false_positive", "underask"):
+            with self.subTest(kind=kind):
+                self.assertIn(kind, self.text)
+
+    def test_readme_points_to_the_document(self) -> None:
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("docs/ACCURACY.md", readme)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,110 @@
+{
+  "total": 228,
+  "full_match": 228,
+  "full_match_rate": 1.0,
+  "safety": 1.0,
+  "penalty": 0,
+  "dangerous": 0,
+  "fields": {
+    "adjustable": {
+      "total": 228,
+      "correct": 228,
+      "accuracy": 1.0,
+      "false_positive": 0,
+      "false_negative": 0,
+      "wrong_value": 0
+    },
+    "budget": {
+      "total": 228,
+      "correct": 228,
+      "accuracy": 1.0,
+      "false_positive": 0,
+      "false_negative": 0,
+      "wrong_value": 0
+    },
+    "categories": {
+      "total": 228,
+      "correct": 228,
+      "accuracy": 1.0,
+      "false_positive": 0,
+      "false_negative": 0,
+      "wrong_value": 0
+    },
+    "city": {
+      "total": 228,
+      "correct": 228,
+      "accuracy": 1.0,
+      "false_positive": 0,
+      "false_negative": 0,
+      "wrong_value": 0
+    },
+    "temperature": {
+      "total": 228,
+      "correct": 228,
+      "accuracy": 1.0,
+      "false_positive": 0,
+      "false_negative": 0,
+      "wrong_value": 0
+    },
+    "width": {
+      "total": 228,
+      "correct": 228,
+      "accuracy": 1.0,
+      "false_positive": 0,
+      "false_negative": 0,
+      "wrong_value": 0
+    }
+  },
+  "blocks": {
+    "adjustable": {
+      "total": 10,
+      "correct": 10,
+      "accuracy": 1.0
+    },
+    "budget": {
+      "total": 30,
+      "correct": 30,
+      "accuracy": 1.0
+    },
+    "categories": {
+      "total": 28,
+      "correct": 28,
+      "accuracy": 1.0
+    },
+    "city": {
+      "total": 20,
+      "correct": 20,
+      "accuracy": 1.0
+    },
+    "hard": {
+      "total": 51,
+      "correct": 51,
+      "accuracy": 1.0
+    },
+    "mixed": {
+      "total": 25,
+      "correct": 25,
+      "accuracy": 1.0
+    },
+    "noop": {
+      "total": 16,
+      "correct": 16,
+      "accuracy": 1.0
+    },
+    "temperature": {
+      "total": 14,
+      "correct": 14,
+      "accuracy": 1.0
+    },
+    "width": {
+      "total": 34,
+      "correct": 34,
+      "accuracy": 1.0
+    }
+  },
+  "statuses": {
+    "clarify": 7,
+    "no_match": 1,
+    "ok": 12
+  }
+}
