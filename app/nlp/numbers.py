@@ -159,6 +159,35 @@ WIDTH_WORDS = frozenset(
     {"ширина", "ширины", "ширине", "ширину", "шириной", "ширин"}
 )
 
+#: Слова «ниша/проём»: место, в которое стол должен влезть. Число рядом с ними —
+#: не точная ширина, а ВЕРХНЯЯ граница: «влезало в нишу 142 см» значит «не шире
+#: 142». До этого правила число получало вид ``NO_TRIGGER``, и :func:`to_bounds`
+#: трактовало его как «ровно 142» — покупатель просил «не шире», а получал
+#: ``no_match`` при десяти подходящих столах. «Ё» здесь не встречается:
+#: :func:`normalize_text` приводит её к «е» («проём» → «проем»).
+NICHE_WORDS = frozenset(
+    {
+        "ниша", "ниши", "нише", "нишу", "нишей", "ниш", "нишам", "нишами", "нишах",
+        "проем", "проема", "проему", "проемом", "проеме", "проемы", "проемов",
+        "проемах", "проема",
+    }
+)
+
+#: Глаголы влезания: «чтобы влезал», «должен поместиться», «впишется». Смысл
+#: границы тот же, что у «ниши»: место ограничено, стол подбирается под него.
+FIT_WORDS = frozenset(
+    {
+        "влезает", "влезал", "влезала", "влезало", "влезают", "влезет", "влезу",
+        "влез", "влезла", "влезло", "влезли",
+        "помещается", "помещался", "помещалась", "поместится", "поместился",
+        "поместилась", "умещается", "уместится", "вписывается", "впишется",
+        "пролезет", "пролезает",
+    }
+)
+
+#: Всё, что делает число шириной даже без «см», и при этом не задаёт её точно.
+WIDTH_MARKERS = WIDTH_WORDS | NICHE_WORDS | FIT_WORDS
+
 #: Максимальное число токенов между «от» и «до» внутри одного диапазона.
 MAX_RANGE_GAP_TOKENS = 4
 
@@ -393,6 +422,10 @@ def _lookback_trigger(tokens: Sequence[str], number_index: int) -> tuple[str, st
     Отдельно распознаётся слово «ширина» в окне перед числом: «ширина до 250»
     без единицы «см» всё равно означает ширину, иначе число уходило в
     «нейтральные» и ограничение покупателя терялось молча.
+
+    Слова «ниша», «проём» и глаголы влезания задают не ширину стола, а предел
+    места: «влезало в нишу 142 см» → ``width_cm <= 142``. Без них число получало
+    ``NO_TRIGGER`` и :func:`to_bounds` читало его как «ровно 142».
     """
     window = [token for token in tokens[max(0, number_index - 3):number_index] if token.isalpha()]
     trigger_kind, trigger_phrase = NO_TRIGGER, ""
@@ -405,6 +438,12 @@ def _lookback_trigger(tokens: Sequence[str], number_index: int) -> tuple[str, st
             trigger_kind, trigger_phrase = kind, phrase
             break
     width_word = _width_word(window)
+    niche_word = _niche_word(window)
+    if niche_word is not None:
+        # «влезало в нишу 142» — верхняя граница, а не точное значение: место
+        # ограничено, стол подбирается под него. Явная конструкция внутри окна
+        # («не шире ниши 142», «ровно в нишу 142») по-прежнему сильнее.
+        return (trigger_kind if trigger_kind != NO_TRIGGER else UPPER_INC), niche_word
     if width_word is not None:
         # Слово «ширина» сильнее денежной подсказки: «ширина до 250» — про стол.
         return trigger_kind, width_word
@@ -420,6 +459,19 @@ def _width_word(window: Sequence[str]) -> str | None:
     """Последнее слово «ширина/ширину/…» в окне перед числом (или ``None``)."""
     for token in reversed(window):
         if token in WIDTH_WORDS:
+            return token
+    return None
+
+
+def _niche_word(window: Sequence[str]) -> str | None:
+    """Последнее слово «ниша/проём/влезает» в окне перед числом (или ``None``).
+
+    Отдельно от :func:`_width_word`, потому что смысл границы другой: «ширина
+    142» — это точная ширина стола, а «влезало в нишу 142» — предел, выше
+    которого стол не подойдёт.
+    """
+    for token in reversed(window):
+        if token in NICHE_WORDS or token in FIT_WORDS:
             return token
     return None
 
@@ -467,6 +519,7 @@ def find_amounts(text: str) -> tuple[Amount, ...]:
     полноценный синтаксический разбор, и покрывает все формулировки из контракта.
     Крайние случаи: «1,5 метра» → 150 см; «15к» → 15000; «4000 к» → кельвины;
     «не шире метра» (без цифры) → 100 см; «стол шириной метр» → ровно 100 см;
+    «влезало в нишу 142 см» → ``upper_inc 142`` (место ограничено, а не стол);
     «от 3000 до 5000» — два отдельных Amount, их объединяет
     :func:`collect_constraints`; «15 000 ₽ за всё» → деньги.
     Вызывается из: app/nlp/extract.py::extract_message.
@@ -484,7 +537,7 @@ def find_amounts(text: str) -> tuple[Amount, ...]:
             kind, trigger = _lookback_trigger(tokens, index)
             if kind == NO_TRIGGER:
                 window = [t for t in tokens[max(0, index - 3):index] if t.isalpha()]
-                if any(t in WIDTH_WORDS for t in window):
+                if any(t in WIDTH_MARKERS for t in window):
                     kind, trigger = EXACT, "ширина"
             if kind != NO_TRIGGER:
                 unit = UNIT_WORDS[token]
@@ -626,10 +679,10 @@ def collect_constraints(amounts: Iterable[Amount]) -> Constraints:
 
     Алгоритм: объединение пар «от…до» → классификация по единице измерения
     (см → ширина, K → температура, ₽ → бюджет) → для чисел без единицы:
-    подсказка «шире/уже» или слово «ширина» → ширина, денежное слово → бюджет,
-    иначе в ``neutral``. Слово «ширина» рядом с числом действует только на
-    правдоподобное значение (1..400 см): в «ширина 100, 15000» второе число
-    остаётся нейтральным и уходит в бюджет.
+    подсказка «шире/уже», слово «ширина», «ниша/проём» или глагол влезания →
+    ширина, денежное слово → бюджет, иначе в ``neutral``. Слово «ширина» рядом
+    с числом действует только на правдоподобное значение (1..400 см): в
+    «ширина 100, 15000» второе число остаётся нейтральным и уходит в бюджет.
     Бюджетом становится только **потолок** пары (см. :func:`_cap_value`): бюджет
     по §3 — верхний предел суммы, поэтому «от 5000 ₽» его не задаёт.
     Сложность: время O(a²) на a чисел в реплике (a <= ~6, то есть константа).
@@ -639,6 +692,8 @@ def collect_constraints(amounts: Iterable[Amount]) -> Constraints:
     Крайние случаи: «до 15 000 ₽» → бюджет; «лампа 4000 к» → температура;
     «стол до 100 см» → ширина; «1 метр» → 100 см; «2 кресла» → количество,
     а не бюджет (попадает в ``neutral`` и отбрасывается как слишком маленькое);
+    «влезало в нишу 142 см» → ширина ``<= 142`` (ниша — предел, а не точная
+    ширина); «стол шириной 142 см» → ровно 142 (там речь о самом столе);
     «от 5000 ₽» и «дороже 5000» → потолка нет, бюджет остаётся неизвестным.
     Вызывается из: app/nlp/extract.py::extract_message.
     """
@@ -665,7 +720,7 @@ def collect_constraints(amounts: Iterable[Amount]) -> Constraints:
         if any(hint in triggers for hint in WIDTH_HINTS):
             width = to_bounds(pair)
             continue
-        if any(amount.trigger in WIDTH_WORDS for amount in pair) and _plausible_width_pair(pair):
+        if any(amount.trigger in WIDTH_MARKERS for amount in pair) and _plausible_width_pair(pair):
             width = to_bounds(pair)
             continue
         if any(amount.trigger in MONEY_HINTS for amount in pair):

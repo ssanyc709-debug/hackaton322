@@ -195,6 +195,81 @@ class WidthBoundaryTest(AttributeTests):
                 self.assertEqual(selected_composition(meters), selected_composition(centimeters))
 
 
+class NicheWidthTest(AttributeTests):
+    """«Влезало в нишу 142 см» — это «не шире 142», а не «ровно 142».
+
+    Баг с ручного каталога ментора: покупатель просил стол, который влезет в
+    нишу, а получал ``no_match``, потому что число без сравнительной конструкции
+    читалось как точное значение. Здесь проверяется и статус, и сам подбор.
+    """
+
+    def test_niche_gives_a_selection_instead_of_no_match(self) -> None:
+        """Главное утверждение бага: подходящие столы есть — значит ``ok``."""
+        document = document_for("Стол, влезало в нишу 142 см. Таганрог. До 20 000 ₽")
+        self.assertEqual(document.get("status"), "ok", document)
+        self.assertTrue(document["options"], "ответ ok без вариантов")
+
+    def test_niche_is_an_upper_inclusive_bound(self) -> None:
+        """Каждый выбранный стол влезает в нишу; ровно 142 см тоже влезает."""
+        query = "Стол, влезало в нишу 142 см. Таганрог. До 20 000 ₽"
+        self.assert_every_item(query, "width_cm", lambda value: value <= 142, "шире ниши 142 см")
+
+        boundary = "Стол в нишу 100 см в Таганроге до 15 000 ₽"
+        self.assert_every_item(boundary, "width_cm", lambda value: value <= 100, "шире ниши 100 см")
+        self.assertIn(
+            100,
+            self.values(boundary, "width_cm"),
+            "стол ровно 100 см влезает в нишу 100 см: граница включительная",
+        )
+
+    def test_niche_phrasings_are_equivalent_to_ne_shire(self) -> None:
+        """«влезает в нишу», «должен влезть в проём» и «не шире» — одно условие."""
+        reference = selected_composition("Стол не шире 100 см в Таганроге до 15 000 ₽")
+        for query in (
+            "Стол в нишу 100 см в Таганроге до 15 000 ₽",
+            "Стол, который влезает в нишу 100 см, в Таганроге до 15 000 ₽",
+            "Стол должен влезть в проём 100 см, Таганрог, до 15 000 ₽",
+            "Стол поместится в нишу 100 см, Таганрог, до 15 000 ₽",
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(
+                    selected_composition(query),
+                    reference,
+                    "формулировки про нишу обязаны давать тот же подбор, что «не шире»",
+                )
+
+    def test_niche_is_not_an_exact_width(self) -> None:
+        """Если бы ниша читалась как «ровно 95», в подбор не попал бы стол 80 см.
+
+        Сравнивать «сколько товаров» нельзя: число вариантов ограничено тремя.
+        Поэтому проверяем сам смысл: предел места впускает столы уже ниши,
+        а точная ширина — только равные ей.
+        """
+        niche = self.values("Стол в нишу 95 см в Таганроге до 15 000 ₽", "width_cm")
+        exact = self.values("Стол шириной ровно 95 см в Таганроге до 15 000 ₽", "width_cm")
+        self.assertTrue(
+            any(value < 95 for value in niche),
+            f"предел места обязан впускать столы уже ниши, получено {niche}",
+        )
+        self.assertTrue(
+            all(value == 95 for value in exact),
+            f"точная ширина впускает только 95 см, получено {exact}",
+        )
+        self.assertNotEqual(sorted(niche), sorted(exact), "ниша и точная ширина — разные условия")
+
+    def test_niche_without_centimeters_is_still_a_width(self) -> None:
+        """«в нишу 142» без «см» — условие не теряется (иначе подбор шире нужного)."""
+        query = "Стол в нишу 100 в Таганроге до 15 000 ₽"
+        self.assert_every_item(query, "width_cm", lambda value: value <= 100, "шире ниши 100")
+
+    def test_meters_and_centimeters_are_the_same_niche(self) -> None:
+        """«В нишу метр» = «в нишу 100 см»."""
+        self.assertEqual(
+            selected_composition("Стол в нишу метр в Таганроге до 15 000 ₽"),
+            selected_composition("Стол в нишу 100 см в Таганроге до 15 000 ₽"),
+        )
+
+
 class ChairAttributeTest(AttributeTests):
     """Кресло: ``adjustable_height`` — boolean, ``false`` не равно «нет значения»."""
 
