@@ -32,6 +32,11 @@ UNIT_M = "m"
 UNIT_K = "k"
 UNIT_RUB = "rub"
 
+#: Правдоподобная ширина стола в сантиметрах: 1..400.
+#: Используется дважды: чтобы отбросить «100 метров» и чтобы слово «ширина»
+#: не перетягивало к себе заведомо денежное число («ширина 100, 15000»).
+MAX_WIDTH_CM = 400
+
 #: Неразрывные и узкие пробелы, которые приходят из веба и Excel.
 SPACE_CHARS = "\u00a0\u2007\u2009\u200a\u202f\u2060\u3000"
 
@@ -384,19 +389,39 @@ def _lookback_trigger(tokens: Sequence[str], number_index: int) -> tuple[str, st
     Если сравнительной конструкции нет, но рядом стоит денежное слово («бюджет»,
     «за всё», «лимит»), оно возвращается как ``trigger``: это подсказка, что число
     относится к деньгам, а не к характеристике.
+
+    Отдельно распознаётся слово «ширина» в окне перед числом: «ширина до 250»
+    без единицы «см» всё равно означает ширину, иначе число уходило в
+    «нейтральные» и ограничение покупателя терялось молча.
     """
     window = [token for token in tokens[max(0, number_index - 3):number_index] if token.isalpha()]
+    trigger_kind, trigger_phrase = NO_TRIGGER, ""
     for size in (3, 2, 1):
         if len(window) < size:
             continue
         phrase = " ".join(window[-size:])
         kind = TRIGGER_PHRASES.get(phrase)
         if kind is not None:
-            return kind, phrase
+            trigger_kind, trigger_phrase = kind, phrase
+            break
+    width_word = _width_word(window)
+    if width_word is not None:
+        # Слово «ширина» сильнее денежной подсказки: «ширина до 250» — про стол.
+        return trigger_kind, width_word
+    if trigger_phrase:
+        return trigger_kind, trigger_phrase
     for token in reversed(window):
         if token in MONEY_HINTS:
             return NO_TRIGGER, token
     return NO_TRIGGER, ""
+
+
+def _width_word(window: Sequence[str]) -> str | None:
+    """Последнее слово «ширина/ширину/…» в окне перед числом (или ``None``)."""
+    for token in reversed(window):
+        if token in WIDTH_WORDS:
+            return token
+    return None
 
 
 def _unit_after(tokens: Sequence[str], index: int, value: float) -> tuple[str | None, int, float]:
@@ -561,6 +586,16 @@ def _pair_unit(pair: Sequence[Amount]) -> str | None:
     return None  # противоречивые единицы в одной паре — условие не собираем
 
 
+def _plausible_width_pair(pair: Sequence[Amount]) -> bool:
+    """Похожи ли значения пары на ширину стола (1..400 см).
+
+    Слово «ширина» рядом с числом делает его шириной, даже если «см» не
+    написано («ширина до 250»). Но когда число заведомо больше 400, это уже
+    не ширина: «ширина 100, 15000» — второе число относится к бюджету.
+    """
+    return all(0 < amount.value <= MAX_WIDTH_CM for amount in pair)
+
+
 def _cap_value(pair: Sequence[Amount]) -> int | None:
     """Бюджет-потолок пары или ``None``, если верхней границы в ней нет.
 
@@ -591,7 +626,10 @@ def collect_constraints(amounts: Iterable[Amount]) -> Constraints:
 
     Алгоритм: объединение пар «от…до» → классификация по единице измерения
     (см → ширина, K → температура, ₽ → бюджет) → для чисел без единицы:
-    подсказка «шире/уже» → ширина, денежное слово → бюджет, иначе в ``neutral``.
+    подсказка «шире/уже» или слово «ширина» → ширина, денежное слово → бюджет,
+    иначе в ``neutral``. Слово «ширина» рядом с числом действует только на
+    правдоподобное значение (1..400 см): в «ширина 100, 15000» второе число
+    остаётся нейтральным и уходит в бюджет.
     Бюджетом становится только **потолок** пары (см. :func:`_cap_value`): бюджет
     по §3 — верхний предел суммы, поэтому «от 5000 ₽» его не задаёт.
     Сложность: время O(a²) на a чисел в реплике (a <= ~6, то есть константа).
@@ -625,6 +663,9 @@ def collect_constraints(amounts: Iterable[Amount]) -> Constraints:
             continue
         triggers = " ".join(amount.trigger for amount in pair)
         if any(hint in triggers for hint in WIDTH_HINTS):
+            width = to_bounds(pair)
+            continue
+        if any(amount.trigger in WIDTH_WORDS for amount in pair) and _plausible_width_pair(pair):
             width = to_bounds(pair)
             continue
         if any(amount.trigger in MONEY_HINTS for amount in pair):

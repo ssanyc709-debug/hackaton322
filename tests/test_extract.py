@@ -6,7 +6,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.model import FIELD_ADJUSTABLE, FIELD_BUDGET, FIELD_CATEGORIES, FIELD_CITY, FIELD_WIDTH
+from app.model import (
+    FIELD_ADJUSTABLE,
+    FIELD_BUDGET,
+    FIELD_CATEGORIES,
+    FIELD_CITY,
+    FIELD_TEMPERATURE,
+    FIELD_WIDTH,
+)
 from app.nlp.cache import LexiconCache, phrase_key
 from app.nlp.extract import extract_message, is_complete, missing_fields
 
@@ -140,6 +147,52 @@ class ExtractAttributeTest(unittest.TestCase):
         self.assertIsNone(extract_message("кресло, Таганрог, до 20000").adjustable_height)
 
 
+class FieldRemovalTest(unittest.TestCase):
+    """Снятие ограничения — это изменение условия, а не новое значение (§2.3)."""
+
+    def test_width_removal_is_detected(self) -> None:
+        slots = extract_message("давай расширим допустимую ширину")
+        self.assertIsNone(slots.width)
+        self.assertEqual(slots.fields_removed, (FIELD_WIDTH,))
+        self.assertIn(FIELD_WIDTH, slots.mentioned)
+
+    def test_new_value_wins_over_removal(self) -> None:
+        """«расширим ширину до 250» — это НОВАЯ ширина, а не снятие."""
+        slots = extract_message("расширим ширину до 250 см")
+        self.assertIsNotNone(slots.width)
+        self.assertEqual(slots.fields_removed, ())
+
+    def test_adjustable_removal_is_detected(self) -> None:
+        slots = extract_message("убери требование к регулировке")
+        self.assertIsNone(slots.adjustable_height)
+        self.assertEqual(slots.fields_removed, (FIELD_ADJUSTABLE,))
+
+    def test_temperature_removal_is_detected(self) -> None:
+        slots = extract_message("без ограничений по температуре")
+        self.assertEqual(slots.fields_removed, (FIELD_TEMPERATURE,))
+
+    def test_ordinary_message_removes_nothing(self) -> None:
+        slots = extract_message("стол в Таганроге до 20000")
+        self.assertEqual(slots.fields_removed, ())
+
+
+class PhraseCategoryTest(unittest.TestCase):
+    """Предмет назван описанием: «на чём сидеть», «что светится» (лексикон)."""
+
+    def test_seat_phrase_is_chair(self) -> None:
+        slots = extract_message("на чём мне сидеть в Таганроге до 15000")
+        self.assertIn("chair", slots.categories)
+        self.assertTrue(slots.categories_additive)
+
+    def test_light_phrase_is_lamp(self) -> None:
+        slots = extract_message("что светится в Азове до 10000")
+        self.assertIn("lamp", slots.categories)
+
+    def test_phrase_does_not_replace_named_categories(self) -> None:
+        slots = extract_message("нужен стол и на чём сидеть, Таганрог, до 20000")
+        self.assertEqual(slots.categories, ("table", "chair"))
+
+
 class CacheTest(unittest.TestCase):
     """Кэш разборов: повтор стоит 0 токенов и не меняет результат."""
 
@@ -169,6 +222,16 @@ class CacheTest(unittest.TestCase):
         slots = extract_message(EXAMPLE_01, cache=reopened)
         self.assertEqual(slots.source, "cache")
         self.assertEqual(slots.budget_rub, 15000)
+
+    def test_cached_removal_is_not_lost(self) -> None:
+        """Снятие ограничения переживает кэш: иначе диалог зависел бы от попадания."""
+        text = "давай расширим допустимую ширину"
+        first = extract_message(text, cache=LexiconCache(self.directory))
+        reopened = LexiconCache(self.directory)
+        second = extract_message(text, cache=reopened)
+        self.assertEqual(second.source, "cache")
+        self.assertEqual(first.fields_removed, (FIELD_WIDTH,))
+        self.assertEqual(second.fields_removed, (FIELD_WIDTH,))
 
     def test_normalized_variants_share_key(self) -> None:
         self.assertEqual(phrase_key("До 15 000 ₽"), phrase_key("до 15000 ₽"))

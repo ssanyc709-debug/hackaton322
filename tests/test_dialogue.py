@@ -92,6 +92,29 @@ class MergeBasicsTest(unittest.TestCase):
         self.assertIs(slots.adjustable_height, True)
         self.assertIn(FIELD_ADJUSTABLE, slots.mentioned)
 
+    def test_removed_width_is_dropped_from_history(self) -> None:
+        """«Расширим ширину» снимает прежнее ограничение, остальное сохраняется."""
+        slots = merge_history(
+            ["Стол не шире 80 см, Таганрог, до 20000", "Давай расширим допустимую ширину"]
+        )
+        self.assertIsNone(slots.width)
+        self.assertEqual(slots.city_id, "taganrog")
+        self.assertEqual(slots.budget_rub, 20000)
+
+    def test_removal_with_new_value_keeps_the_value(self) -> None:
+        slots = merge_history(
+            ["Стол не шире 80 см, Таганрог, до 20000", "Расширим ширину до 250"]
+        )
+        assert slots.width is not None and slots.width.upper is not None
+        self.assertEqual(slots.width.upper.value, 250)
+
+    def test_removed_adjustable_is_dropped_from_history(self) -> None:
+        slots = merge_history(
+            ["Кресло с регулировкой высоты, Таганрог, до 20000", "Убери требование к регулировке"]
+        )
+        self.assertIsNone(slots.adjustable_height)
+        self.assertEqual(slots.categories, ("chair",))
+
 
 class ModelCallPolicyTest(unittest.TestCase):
     """§5: модель — один вызов на запрос и только если история не закрыла условия."""

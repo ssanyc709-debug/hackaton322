@@ -111,6 +111,27 @@ class AmountParsingTest(unittest.TestCase):
         amounts = find_amounts("0,95 метра")
         self.assertEqual(amounts[0].value, 95)
 
+    def test_width_word_makes_bare_number_width(self) -> None:
+        """«ширина до 250» без «см» — всё равно ширина, иначе условие теряется."""
+        constraints = collect_constraints(find_amounts("ширина до 250"))
+        self.assertIsNotNone(constraints.width)
+        assert constraints.width is not None
+        self.assertEqual(constraints.width.upper.value, 250)
+        self.assertTrue(constraints.width.upper.inclusive)
+
+    def test_width_word_is_stronger_than_money_hint(self) -> None:
+        """«бюджет» не перетягивает число, если рядом прямо сказано «ширина»."""
+        constraints = collect_constraints(find_amounts("бюджет потом, ширина до 250"))
+        self.assertIsNone(constraints.budget_rub)
+        self.assertIsNotNone(constraints.width)
+
+    def test_width_word_does_not_swallow_money_number(self) -> None:
+        """«ширина 100, 15000»: большое число рядом со словом «ширина» — не ширина."""
+        constraints = collect_constraints(find_amounts("ширина 100, 15000"))
+        assert constraints.width is not None
+        self.assertEqual(constraints.width.upper.value, 100)
+        self.assertTrue(constraints.neutral)
+
     def test_quantity_without_trigger_is_not_money(self) -> None:
         """«2 кресла» — это количество, а не бюджет."""
         constraints = collect_constraints(find_amounts("нужны 2 кресла"))

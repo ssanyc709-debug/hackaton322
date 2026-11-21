@@ -104,7 +104,9 @@ class Slots:
     только они заменяют прежние значения при слиянии истории (§2.3), остальные
     сохраняются как есть. ``categories_removed`` — категории, от которых покупатель
     отказался («без лампы», «стол не нужен»), ``categories_additive`` — признак
-    «добавь ещё», а не «замени всё».
+    «добавь ещё», а не «замени всё». ``fields_removed`` — ограничения, которые
+    покупатель снял («расширим ширину», «убери требование к регулировке»):
+    при слиянии такое поле обнуляется, как и отказанная категория.
     """
 
     city_id: str | None = None
@@ -116,6 +118,7 @@ class Slots:
     city_unknown: str | None = None
     categories_unknown: tuple[str, ...] = ()
     categories_removed: tuple[str, ...] = ()
+    fields_removed: tuple[str, ...] = ()
     categories_explicit: bool = False
     categories_additive: bool = False
     mentioned: frozenset[str] = frozenset()

@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -19,11 +20,15 @@ from app.model import Bound, NumericRange, Slots
 from app.nlp.numbers import normalize_text
 
 #: Версия формата файла кэша.
-CACHE_FORMAT_VERSION = 1
+#: 1 → 2: в записи слота добавлено ``fields_removed`` (снятие ограничений);
+#: записи прежнего формата не знают об этом поле, поэтому не переиспользуются.
+CACHE_FORMAT_VERSION = 2
 #: Версия лексикона: при изменении словарей старые разборы недействительны.
 #: 4 — исправлено слияние пар (одиночная нижняя граница не теряется, Д1)
 #: и потолок бюджета берётся только из верхних границ (Д2).
-LEXICON_VERSION = 4
+#: 5 — слово «ширина» делает число шириной без единицы «см»; появилось
+#: снятие ограничений («расширим ширину», «убери регулировку»).
+LEXICON_VERSION = 5
 #: Имя файла кэша разборов.
 CACHE_FILE_NAME = "lexicon.json"
 #: Предел числа записей: при переполнении половина старых отбрасывается.
@@ -155,18 +160,27 @@ class LexiconCache:
             "lexicon_version": LEXICON_VERSION,
             "entries": entries,
         }
-        temporary = self.path.with_suffix(".tmp")
+        temporary_path: str | None = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-            os.replace(temporary, self.path)
+            # Уникальный временный файл на каждый запуск: параллельные процессы
+            # не перезаписывают один и тот же `.tmp` (иначе кэш портился).
+            descriptor, temporary_path = tempfile.mkstemp(
+                dir=str(self.path.parent), prefix=self.path.name + ".", suffix=".tmp"
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            os.replace(temporary_path, self.path)
+            temporary_path = None
         except OSError as exc:
             print(f"[buyer-assistant] не удалось записать кэш разборов ({self.path}): {exc}",
                   file=sys.stderr, flush=True)
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
+        finally:
+            if temporary_path is not None:
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
 
 
 def _bound_to_json(bound: Bound | None) -> list[Any] | None:
@@ -216,6 +230,7 @@ def _encode_slots(slots: Slots) -> dict[str, Any]:
         "city_unknown": slots.city_unknown,
         "categories_unknown": list(slots.categories_unknown),
         "categories_removed": list(slots.categories_removed),
+        "fields_removed": list(slots.fields_removed),
         "categories_explicit": slots.categories_explicit,
         "categories_additive": slots.categories_additive,
         "mentioned": sorted(slots.mentioned),
@@ -244,6 +259,7 @@ def _decode_slots(payload: Mapping[str, Any]) -> Slots:
         city_unknown=payload.get("city_unknown"),
         categories_unknown=tuple(str(name) for name in (payload.get("categories_unknown") or [])),
         categories_removed=tuple(str(name) for name in (payload.get("categories_removed") or [])),
+        fields_removed=tuple(str(field) for field in (payload.get("fields_removed") or [])),
         categories_explicit=bool(payload.get("categories_explicit")),
         categories_additive=bool(payload.get("categories_additive")),
         mentioned=frozenset(str(field) for field in mentioned),

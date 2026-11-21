@@ -34,6 +34,8 @@ from app.nlp.lexicon import get_lexicon, order_categories
 from app.nlp.numbers import (
     LOWER_INC,
     LOWER_STRICT,
+    # граница правдоподобной ширины стола, см (защита от «100 метров»)
+    MAX_WIDTH_CM,
     UNIT_RUB,
     collect_constraints,
     find_amounts,
@@ -49,8 +51,7 @@ NON_CAPPING_KINDS = frozenset({LOWER_INC, LOWER_STRICT})
 #: Нижняя/верхняя границы правдоподобной цветовой температуры, K.
 MIN_KELVIN = 1500
 MAX_KELVIN = 9000
-#: Верхняя граница правдоподобной ширины стола, см (защита от «100 метров»).
-MAX_WIDTH_CM = 400
+
 #: Максимальная длина реплики, которую имеет смысл отдавать в модель.
 MAX_MODEL_TEXT_BYTES = 4_000
 
@@ -77,6 +78,42 @@ REMOVAL_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 #: «Добавь ещё», а не «замени всё»: при таких словах категории объединяются с прежними.
 ADDITIVE_PATTERN = re.compile(r"\b(?:еще|также|плюс|вдобавок|добавь|добавьте|дополнительно)\b")
+
+#: Фразы-описания без названия категории: «на чём мне сидеть» — кресло,
+#: «что светится» — лампа. Существительное не названо, поэтому поиск по
+#: отдельным словам их не видит. Такая фраза ДОБАВЛЯЕТ категорию, а не заменяет
+#: набор: «нужен стол и на чём сидеть» — это стол и кресло.
+PHRASE_CATEGORIES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"на\s+ч[её]м\s+(?:мне\s+)?сидеть|где\s+(?:мне\s+)?сидеть|"
+            r"посид\w*|посадочн\w*\s+мест\w*|мест\w*\s+для\s+сидения"
+        ),
+        "chair",
+    ),
+    (
+        re.compile(r"что(?:\s*-?\s*то)?\s+светит\w*|что-то\s+светящ\w*|источник\w*\s+света"),
+        "lamp",
+    ),
+)
+
+#: Основы команд «снять ограничение»: «расширим ширину», «убери регулировку».
+REMOVAL_CUE_STEMS: tuple[str, ...] = (
+    "расшир", "убер", "убир", "убра", "сним", "снят", "откаж", "неважн",
+)
+
+#: Основы названий характеристик → поле условия, которое снимается.
+REMOVAL_FIELD_STEMS: tuple[tuple[str, str], ...] = (
+    ("ширин", FIELD_WIDTH),
+    ("температур", FIELD_TEMPERATURE),
+    ("регулиров", FIELD_ADJUSTABLE),
+    ("подъем", FIELD_ADJUSTABLE),
+    ("подъём", FIELD_ADJUSTABLE),
+)
+
+#: Окно поиска названия характеристики вокруг команды снятия (в токенах).
+REMOVAL_WINDOW_BEFORE = 5
+REMOVAL_WINDOW_AFTER = 7
 
 #: Предлоги, после которых слово категории означает МЕСТО, а не товар:
 #: «посветить над столом», «поставить под лампу», «лампа на стол».
@@ -114,7 +151,8 @@ def extract_message(
     Алгоритм: нормализация → токенизация → лексикон (город, категории,
     неподдерживаемые слова) → числа и границы → классификация «нейтральных»
     чисел по составу категорий → флаг регулировки регулярным выражением →
-    (опционально) один вызов модели для незакрытых полей, но только если
+    снятие ограничений («расширим ширину», «убери регулировку» → ``fields_removed``)
+    → (опционально) один вызов модели для незакрытых полей, но только если
     :func:`model_can_help` подтвердил, что она может их закрыть → запись в кэш.
     Сложность: время O(len(text)) на нормализацию и проход по токенам;
     память O(числа токенов). Модель — единственная сетевая операция.
@@ -160,9 +198,15 @@ def _lexicon_slots(normalized: str) -> Slots:
         city_unknown = foreign_city_hits[-1].value
 
     categories = order_categories(hit.value for hit in category_hits)
+    phrase_categories = tuple(
+        category for pattern, category in PHRASE_CATEGORIES if pattern.search(normalized)
+    )
+    if phrase_categories:
+        categories = order_categories((*categories, *phrase_categories))
     categories_unknown = tuple(dict.fromkeys(hit.value for hit in unsupported_hits))
     categories_removed = _detect_removals(normalized)
-    categories_additive = bool(ADDITIVE_PATTERN.search(normalized))
+    # Фраза-описание добавляет категорию к уже названным, а не заменяет набор.
+    categories_additive = bool(ADDITIVE_PATTERN.search(normalized)) or bool(phrase_categories)
 
     constraints = collect_constraints(find_amounts(normalized))
     width = constraints.width
@@ -193,6 +237,16 @@ def _lexicon_slots(normalized: str) -> Slots:
 
     adjustable = _detect_adjustable(normalized)
 
+    # Снятие ограничения: «расширим ширину», «убери регулировку». Если в этой же
+    # реплике полю дали значение, это замена, а не снятие.
+    fields_removed = _detect_field_removals(normalized)
+    if width is not None:
+        fields_removed = tuple(field for field in fields_removed if field != FIELD_WIDTH)
+    if temperature is not None:
+        fields_removed = tuple(field for field in fields_removed if field != FIELD_TEMPERATURE)
+    if adjustable is not None:
+        fields_removed = tuple(field for field in fields_removed if field != FIELD_ADJUSTABLE)
+
     mentioned: set[str] = set()
     if city_id is not None or city_unknown is not None:
         mentioned.add(FIELD_CITY)
@@ -206,6 +260,7 @@ def _lexicon_slots(normalized: str) -> Slots:
         mentioned.add(FIELD_TEMPERATURE)
     if adjustable is not None:
         mentioned.add(FIELD_ADJUSTABLE)
+    mentioned.update(fields_removed)
 
     return Slots(
         city_id=city_id,
@@ -217,7 +272,11 @@ def _lexicon_slots(normalized: str) -> Slots:
         city_unknown=city_unknown,
         categories_unknown=categories_unknown,
         categories_removed=categories_removed,
-        categories_explicit=bool(category_hits) or bool(categories_removed) or bool(categories_unknown),
+        fields_removed=fields_removed,
+        categories_explicit=bool(category_hits)
+        or bool(categories_removed)
+        or bool(categories_unknown)
+        or bool(phrase_categories),
         categories_additive=categories_additive,
         mentioned=frozenset(mentioned),
         source="lexicon",
@@ -252,6 +311,59 @@ def _detect_removals(normalized: str) -> tuple[str, ...]:
             category = CATEGORY_STEM_TO_ID.get(match.group(1))
             if category is not None and category not in removed:
                 removed.append(category)
+    return tuple(removed)
+
+
+def _removal_cue(tokens: Sequence[str], index: int) -> str | None:
+    """Команда «снять ограничение» в позиции ``index`` (или ``None``).
+
+    «Без» — команда только для ширины и температуры: «без регулировки высоты»
+    означает ``adjustable_height = False`` (значение), а не снятие условия.
+    """
+    token = tokens[index]
+    if token.startswith(REMOVAL_CUE_STEMS):
+        return token
+    if token == "без":
+        return "без"
+    if token == "не" and index + 1 < len(tokens) and tokens[index + 1].startswith("важн"):
+        return "неважно"
+    return None
+
+
+def _removal_field(token: str) -> str | None:
+    """Поле условия по названию характеристики («ширину» → ``width_cm``)."""
+    for stem, field in REMOVAL_FIELD_STEMS:
+        if token.startswith(stem):
+            return field
+    return None
+
+
+def _detect_field_removals(normalized: str) -> tuple[str, ...]:
+    """Находит ограничения, которые покупатель снял в этой реплике.
+
+    «Давай расширим допустимую ширину», «убери требование к регулировке»,
+    «без ограничений по температуре» — это явное изменение условия, а не новое
+    значение: при слиянии истории такое поле обнуляется (по образцу
+    :data:`REMOVAL_PATTERNS` для категорий). Ограничение считается снятым,
+    только если в этой же реплике ему не дали значение — иначе
+    «расширим ширину до 250 см» потеряло бы новую ширину.
+    """
+    tokens = tokenize(normalized)
+    removed: list[str] = []
+    for index in range(len(tokens)):
+        cue = _removal_cue(tokens, index)
+        if cue is None:
+            continue
+        start = max(0, index - REMOVAL_WINDOW_BEFORE)
+        end = min(len(tokens), index + REMOVAL_WINDOW_AFTER)
+        for other in tokens[start:end]:
+            field = _removal_field(other)
+            if field is None:
+                continue
+            if cue == "без" and field == FIELD_ADJUSTABLE:
+                continue
+            if field not in removed:
+                removed.append(field)
     return tuple(removed)
 
 

@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -545,17 +546,27 @@ def _store_cached_index(index: CatalogIndex, cache_dir: Path) -> None:
             for (city_id, category), bucket in index.buckets.items()
         },
     }
-    temporary = path.with_suffix(".tmp")
+    temporary_path: str | None = None
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-        os.replace(temporary, path)
+        # Уникальный временный файл: параллельные запуски (фронт шлёт запросы
+        # подряд) не должны писать в один и тот же `.tmp` — иначе один процесс
+        # может опубликовать недописанный файл другого и кэш станет битым.
+        descriptor, temporary_path = tempfile.mkstemp(
+            dir=str(cache_dir), prefix=path.name + ".", suffix=".tmp"
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        os.replace(temporary_path, path)
+        temporary_path = None
     except OSError as exc:
         print(f"[buyer-assistant] не удалось записать кэш индекса ({path}): {exc}", file=sys.stderr, flush=True)
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+    finally:
+        if temporary_path is not None:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
 
 
 # --- Фильтры ---------------------------------------------------------------
