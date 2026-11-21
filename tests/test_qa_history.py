@@ -299,14 +299,19 @@ class CategoryHistoryTest(HistoryCase):
 
 
 class MultipleCitiesTest(HistoryCase):
-    """Несколько городов в запросе: подбор идёт в каждом, комплект — в одном.
+    """Несколько городов в запросе: контракт требует «один город», остальные не берутся.
 
-    Контракт §2 требует, чтобы комплект собирался для самовывоза в ОДНОМ городе,
-    и это правило соблюдается: внутри варианта города не смешиваются. Но §3
-    говорит про «один город», поэтому «в Таганроге или в Азове» сейчас означает
-    «взять последний упомянутый» — покупатель видит варианты только в Азове.
-    Тесты ниже описывают ожидаемое поведение и помечены ``skip``:
-    ``docs/QA-ERRORS.md``, БАГ №3.
+    Контракт §3: «Помощник извлекает … общий бюджет в рублях, **один город** и
+    необязательные ограничения». §2 добавляет, что комплект собирается для
+    самовывоза в одном городе — это правило соблюдается: внутри варианта города
+    не смешиваются (``test_each_option_is_within_one_city`` проходит).
+
+    Поэтому «в Таганроге или в Азове» по ТЗ означает «взять один город»
+    (сейчас — последний упомянутый), и варианты в обоих городах контракт не
+    требует. Тесты ниже описывают поведение, которого в ТЗ **нет**: они остаются
+    в наборе как документация границы и помечены ``skip`` с явной причиной.
+    Мульти-город сознательно не реализуется (решение команды, см.
+    ``docs/QA-ERRORS.md``, раздел «Вне области задачи»).
     """
 
     def cities_per_option(self, document: Mapping[str, Any]) -> list[set[str]]:
@@ -322,7 +327,7 @@ class MultipleCitiesTest(HistoryCase):
             with self.subTest(option=index):
                 self.assertEqual(len(cities), 1, f"вариант смешал города: {sorted(cities)}")
 
-    @unittest.skip("БАГ №3 (docs/QA-ERRORS.md): из двух городов используется только последний")
+    @unittest.skip("вне ТЗ §3: «извлекается один город», варианты в обоих не требуются")
     def test_both_cities_are_presented(self) -> None:
         document = dialogue(user("Стол в Таганроге или в Азове до 5000 ₽"))
         self.assertEqual(document.get("status"), "ok", document)
@@ -340,14 +345,14 @@ class MultipleCitiesTest(HistoryCase):
                     budget_rub=5000,
                 )
 
-    @unittest.skip("БАГ №3 (docs/QA-ERRORS.md): из трёх городов используется только последний")
+    @unittest.skip("вне ТЗ §3: «извлекается один город», три города не требуются")
     def test_three_cities_are_all_presented(self) -> None:
         document = dialogue(user("Стол в Таганроге, Азове или Ростове-на-Дону до 3000 ₽"))
         self.assertEqual(document.get("status"), "ok", document)
         presented = set().union(*self.cities_per_option(document))
         self.assertEqual(presented, {"taganrog", "azov", "rostov-na-donu"})
 
-    @unittest.skip("БАГ №3 (docs/QA-ERRORS.md): no_match упоминает только последний город")
+    @unittest.skip("вне ТЗ §3: no_match объясняет выбранный город, а не все упомянутые")
     def test_no_match_when_neither_city_fits(self) -> None:
         document = dialogue(user("Стол в Таганроге или в Азове до 100 ₽"))
         self.assertEqual(document.get("status"), "no_match", document)
@@ -356,7 +361,7 @@ class MultipleCitiesTest(HistoryCase):
         self.assertIn("Таганрог", message, "в объяснении нет первого города")
         self.assertIn("Азов", message, "в объяснении нет второго города")
 
-    @unittest.skip("БАГ №3 (docs/QA-ERRORS.md): «или в Азове» заменяет город вместо добавления")
+    @unittest.skip("вне ТЗ §3: «или в Азове» заменяет город — извлекается один город")
     def test_or_in_a_follow_up_adds_the_city(self) -> None:
         """«Или в Азове» — альтернатива, прежний город сохраняется."""
         document = dialogue(

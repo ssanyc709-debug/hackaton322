@@ -238,7 +238,9 @@ class CatalogIsTakenFromArgumentTest(CatalogCase):
         document = document_for(
             "Стол в Азове до 5000 ₽",
             catalog="~/catalog.json",
-            extra_env={"HOME": str(home)},
+            # HOME — для Linux/macOS, USERPROFILE — для Windows: Path.expanduser()
+            # берёт из них домашний каталог на разных платформах.
+            extra_env={"HOME": str(home), "USERPROFILE": str(home)},
         )
         self.assert_ok(document)
 

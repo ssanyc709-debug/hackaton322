@@ -32,6 +32,8 @@ from app.model import (
 from app.nlp.cache import LexiconCache
 from app.nlp.lexicon import get_lexicon, order_categories
 from app.nlp.numbers import (
+    LOWER_INC,
+    LOWER_STRICT,
     UNIT_RUB,
     collect_constraints,
     find_amounts,
@@ -42,6 +44,8 @@ from app.nlp.numbers import (
 
 #: Верхняя граница «мелких» чисел: меньше этого числа не считаются бюджетом.
 MIN_BUDGET_GUESS = 1000
+#: Виды границ, которые ограничивают значение снизу и потолком бюджета быть не могут.
+NON_CAPPING_KINDS = frozenset({LOWER_INC, LOWER_STRICT})
 #: Нижняя/верхняя границы правдоподобной цветовой температуры, K.
 MIN_KELVIN = 1500
 MAX_KELVIN = 9000
@@ -181,7 +185,11 @@ def _lexicon_slots(normalized: str) -> Slots:
         ):
             temperature = to_bounds(group)
         elif max(values) >= MIN_BUDGET_GUESS and budget is None:
-            budget = max(values)
+            # Нижняя граница («бюджет от 5000», «дороже 5000») потолком не является:
+            # бюджет по §3 — верхний предел, иначе покупателю предложат ровно то,
+            # что он просил не предлагать.
+            if any(amount.kind not in NON_CAPPING_KINDS for amount in group):
+                budget = max(values)
 
     adjustable = _detect_adjustable(normalized)
 

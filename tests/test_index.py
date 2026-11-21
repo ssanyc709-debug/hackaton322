@@ -165,6 +165,82 @@ class IndexBuildTest(unittest.TestCase):
         self.assertNotEqual(second.digest, first.digest)
 
 
+class AttributeTypeTest(unittest.TestCase):
+    """§2: типы ``attributes`` — часть контракта, а не пожелание.
+
+    Битый тип характеристики — технический сбой (:class:`CatalogError`), а не
+    «характеристика неизвестна»: иначе ``width_cm: "90"`` молча выключил бы
+    ограничение покупателя, и ответ выглядел бы законным (та же логика, что
+    уже действует для ``price_rub``).
+    """
+
+    def build_with(self, attributes: object, category: str = "table") -> None:
+        """Пытается построить индекс из одного объявления с такими характеристиками."""
+        build_index([dict(DOCUMENT[0], category=category, attributes=attributes)])
+
+    def test_valid_scalars_are_accepted(self) -> None:
+        """Строка, число и boolean в дополнительных ключах допустимы (§2)."""
+        item = dict(
+            DOCUMENT[0],
+            attributes={
+                "width_cm": 90,
+                "material": "дуб",
+                "height_cm": 75,
+                "folding": True,
+                "weight_kg": 12.5,
+            },
+        )
+        listing = build_index([item]).listings[0]
+        self.assertEqual(listing.numeric("width_cm"), 90)
+        self.assertEqual(listing.attributes["material"], "дуб")
+        self.assertIs(listing.flag("folding"), True)
+
+    def test_width_as_string_is_rejected(self) -> None:
+        with self.assertRaises(CatalogError):
+            self.build_with({"width_cm": "90"})
+
+    def test_width_zero_is_rejected(self) -> None:
+        with self.assertRaises(CatalogError):
+            self.build_with({"width_cm": 0})
+
+    def test_width_boolean_is_rejected(self) -> None:
+        """``True`` — не «ширина 1 см»."""
+        with self.assertRaises(CatalogError):
+            self.build_with({"width_cm": True})
+
+    def test_fractional_width_is_rejected(self) -> None:
+        with self.assertRaises(CatalogError):
+            self.build_with({"width_cm": 90.5})
+
+    def test_integral_float_width_is_normalised(self) -> None:
+        """``90.0`` математически целое и по схеме валидно, поэтому это ширина 90."""
+        listing = build_index([dict(DOCUMENT[0], attributes={"width_cm": 90.0})]).listings[0]
+        self.assertEqual(listing.numeric("width_cm"), 90)
+
+    def test_temperature_as_string_is_rejected(self) -> None:
+        with self.assertRaises(CatalogError):
+            self.build_with({"color_temperature_k": "4000"}, category="lamp")
+
+    def test_flag_as_number_is_rejected(self) -> None:
+        """``1`` вместо ``true`` — нарушение схемы: ``false`` и ``0`` не путаются."""
+        with self.assertRaises(CatalogError):
+            self.build_with({"adjustable_height": 1}, category="chair")
+
+    def test_nested_or_null_value_is_rejected(self) -> None:
+        for value in ({"cm": 90}, [90], None):
+            with self.subTest(value=value):
+                with self.assertRaises(CatalogError):
+                    self.build_with({"extra": value})
+
+    def test_unknown_key_with_zero_and_false_is_allowed(self) -> None:
+        """Дополнительные ключи §2 не ограничивает: ``0`` и ``false`` там валидны."""
+        listing = build_index(
+            [dict(DOCUMENT[0], attributes={"height_cm": 0, "folding": False})]
+        ).listings[0]
+        self.assertEqual(listing.attributes["height_cm"], 0)
+        self.assertIs(listing.flag("folding"), False)
+
+
 class DiskCacheTest(unittest.TestCase):
     """Кэш индекса: ключ — содержимое каталога, перестройка при изменении."""
 

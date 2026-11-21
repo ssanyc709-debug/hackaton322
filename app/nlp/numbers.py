@@ -113,6 +113,11 @@ MONEY_HINTS = frozenset(
      "лимит", "лимитом", "всего", "итого", "максимум", "потрачу", "располагаю", "есть"}
 )
 
+#: Виды сравнения, из которых может получиться бюджет-потолок (§3: бюджет — это
+#: верхний предел суммы). Нижние границы сюда не входят: «от 5000 ₽» покупатель
+#: сказал, чтобы ему не предлагали дешевле, а не чтобы ограничить сверху.
+CAPPING_KINDS = (UPPER_INC, UPPER_STRICT, EXACT, NO_TRIGGER)
+
 #: Сравнительные конструкции. Ключ — фраза (слова через пробел), значение — вид.
 #: Порядок в словаре не важен: при разборе фразы проверяются от длинных к коротким,
 #: поэтому «не уже» всегда побеждает «уже», а «не более» — «более».
@@ -511,6 +516,12 @@ def _merge_pairs(items: Sequence[Amount]) -> list[tuple[Amount, ...]]:
     не больше :data:`MAX_RANGE_GAP_TOKENS` токенов и у них нет противоречащих
     единиц измерения. Так «от 80 до 100 см» становится одним диапазоном, а
     «до 100 ₽, от 3000 до 5000 кельвинов» — тремя отдельными условиями.
+
+    Одиночная нижняя граница — самостоятельное условие (§2.2), даже если верхняя
+    граница далеко: в «Стол от 100 см в Таганроге до 15 000 ₽» слово «до»
+    относится к бюджету, а не к ширине. Поэтому «пара не найдена» проверяется
+    явным флагом ``paired``: ветка ``else`` у ``for`` здесь не годится, потому что
+    при выходе по ``break`` она не выполняется и условие покупателя терялось молча.
     """
     result: list[tuple[Amount, ...]] = []
     used: set[int] = set()
@@ -518,6 +529,7 @@ def _merge_pairs(items: Sequence[Amount]) -> list[tuple[Amount, ...]]:
         if position in used:
             continue
         if amount.kind in (LOWER_INC, LOWER_STRICT):
+            paired = False
             for other_position in range(position + 1, len(items)):
                 if other_position in used:
                     continue
@@ -530,8 +542,9 @@ def _merge_pairs(items: Sequence[Amount]) -> list[tuple[Amount, ...]]:
                     continue
                 result.append((amount, other))
                 used.update({position, other_position})
+                paired = True
                 break
-            else:
+            if not paired:
                 result.append((amount,))
             continue
         result.append((amount,))
@@ -546,6 +559,22 @@ def _pair_unit(pair: Sequence[Amount]) -> str | None:
     if len(units) == 1:
         return next(iter(units))
     return None  # противоречивые единицы в одной паре — условие не собираем
+
+
+def _cap_value(pair: Sequence[Amount]) -> int | None:
+    """Бюджет-потолок пары или ``None``, если верхней границы в ней нет.
+
+    Бюджет в контракте — верхний предел суммы, поэтому потолком может стать
+    только «до 5000 ₽», «не дороже 5000», «ровно 5000» или голое число
+    («бюджет 15000», «располагаю 15 тысячами»). Одиночная нижняя граница
+    («от 5000 ₽», «дороже 5000») ограничивает сумму снизу: превращать её
+    в потолок нельзя, иначе покупателю предложат ровно то, что он просил
+    не предлагать. В паре «от 3000 до 5000 ₽» потолок по-прежнему 5000.
+    """
+    caps = [amount.value for amount in pair if amount.kind in CAPPING_KINDS]
+    if not caps:
+        return None
+    return max(caps)
 
 
 def collect_constraints(amounts: Iterable[Amount]) -> Constraints:
@@ -563,13 +592,16 @@ def collect_constraints(amounts: Iterable[Amount]) -> Constraints:
     Алгоритм: объединение пар «от…до» → классификация по единице измерения
     (см → ширина, K → температура, ₽ → бюджет) → для чисел без единицы:
     подсказка «шире/уже» → ширина, денежное слово → бюджет, иначе в ``neutral``.
+    Бюджетом становится только **потолок** пары (см. :func:`_cap_value`): бюджет
+    по §3 — верхний предел суммы, поэтому «от 5000 ₽» его не задаёт.
     Сложность: время O(a²) на a чисел в реплике (a <= ~6, то есть константа).
     Почему именно он: реплика короткая, квадратичный перебор пар дешевле
     сложного парсера диапазонов, а нейтральные числа не угадываются здесь —
     их решение требует контекста категорий, который есть только выше по стеку.
     Крайние случаи: «до 15 000 ₽» → бюджет; «лампа 4000 к» → температура;
     «стол до 100 см» → ширина; «1 метр» → 100 см; «2 кресла» → количество,
-    а не бюджет (попадает в ``neutral`` и отбрасывается как слишком маленькое).
+    а не бюджет (попадает в ``neutral`` и отбрасывается как слишком маленькое);
+    «от 5000 ₽» и «дороже 5000» → потолка нет, бюджет остаётся неизвестным.
     Вызывается из: app/nlp/extract.py::extract_message.
     """
     items = list(amounts)
@@ -580,9 +612,10 @@ def collect_constraints(amounts: Iterable[Amount]) -> Constraints:
 
     for pair in _merge_pairs(items):
         unit = _pair_unit(pair)
-        values = [amount.value for amount in pair]
         if unit == UNIT_RUB:
-            budget = max(budget or 0, max(values))
+            cap = _cap_value(pair)
+            if cap is not None:
+                budget = max(budget or 0, cap)
             continue
         if unit == UNIT_CM:
             width = to_bounds(pair)
@@ -595,8 +628,10 @@ def collect_constraints(amounts: Iterable[Amount]) -> Constraints:
             width = to_bounds(pair)
             continue
         if any(amount.trigger in MONEY_HINTS for amount in pair):
-            budget = max(budget or 0, max(values))
-            continue
+            cap = _cap_value(pair)
+            if cap is not None:
+                budget = max(budget or 0, cap)
+                continue
         neutral_groups.append(pair)
 
     return Constraints(

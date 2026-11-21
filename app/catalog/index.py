@@ -26,6 +26,14 @@ REQUIRED_LISTING_FIELDS: frozenset[str] = frozenset(
     {"id", "category", "title", "description", "price_rub", "city_id", "attributes"}
 )
 
+#: Числовые характеристики §2 — целое >= 1; булевы — только boolean.
+#: ``bool`` в Python — подкласс ``int``, поэтому проверяется раньше: иначе
+#: ``True`` превратился бы в ширину «1 см», а ``0`` — в «ширина неизвестна».
+NUMERIC_ATTRIBUTES: frozenset[str] = frozenset(
+    {CATEGORY_ATTRIBUTE["table"], CATEGORY_ATTRIBUTE["lamp"]}
+)
+FLAG_ATTRIBUTES: frozenset[str] = frozenset({CATEGORY_ATTRIBUTE["chair"]})
+
 #: Версия формата файла кэша: при смене структуры старые файлы игнорируются.
 CACHE_FORMAT_VERSION = 1
 #: Длина префикса дайджеста в имени файла кэша (полный дайджест хранится внутри).
@@ -174,14 +182,81 @@ def binary_search_last_le(values: Sequence[int], bound: int) -> int:
     return result
 
 
+def normalize_attributes(value: Any, where: str) -> dict[str, Any]:
+    """Проверяет типы значений ``attributes`` по §2 и нормализует целые float.
+
+    Каталог, нарушающий схему, — технический сбой (``CatalogError``), а не
+    ``no_match``: иначе «ширина строкой» тихо превратилась бы в «ширина
+    неизвестна» и ограничение покупателя потерялось бы без следа.
+
+    Допустимо (§2): строка, число, boolean; известные ключи — строго своих
+    типов. ``90.0`` в JSON — математически целое и по схеме валидно, поэтому
+    приводится к ``90``; ``90.5`` и ``0`` — уже нарушение схемы.
+
+    Сложность: O(k) по числу характеристик (k — мало), память O(k).
+    """
+    if not isinstance(value, dict):
+        raise CatalogError(f"{where}: attributes должен быть объектом")
+
+    normalized: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise CatalogError(
+                f"{where}: имя характеристики должно быть строкой, "
+                f"получено {type(key).__name__}"
+            )
+        if isinstance(item, bool):
+            if key in NUMERIC_ATTRIBUTES:
+                raise CatalogError(
+                    f"{where}: {key} должен быть целым >= 1, получено {item!r}"
+                )
+            normalized[key] = item
+        elif isinstance(item, int):
+            if key in FLAG_ATTRIBUTES:
+                raise CatalogError(
+                    f"{where}: {key} должен быть boolean, получено {item!r}"
+                )
+            if key in NUMERIC_ATTRIBUTES and item < 1:
+                raise CatalogError(
+                    f"{where}: {key} должен быть целым >= 1, получено {item!r}"
+                )
+            normalized[key] = item
+        elif isinstance(item, float):
+            if key in FLAG_ATTRIBUTES:
+                raise CatalogError(
+                    f"{where}: {key} должен быть boolean, получено {item!r}"
+                )
+            if key in NUMERIC_ATTRIBUTES:
+                if not item.is_integer() or item < 1:
+                    raise CatalogError(
+                        f"{where}: {key} должен быть целым >= 1, получено {item!r}"
+                    )
+                normalized[key] = int(item)
+            else:
+                normalized[key] = item
+        elif isinstance(item, str):
+            if key in NUMERIC_ATTRIBUTES or key in FLAG_ATTRIBUTES:
+                raise CatalogError(
+                    f"{where}: {key} должен иметь тип по схеме, получено строкой {item!r}"
+                )
+            normalized[key] = item
+        else:
+            raise CatalogError(
+                f"{where}: значение характеристики {key!r} недопустимого типа "
+                f"{type(item).__name__} (разрешены строка, число, boolean)"
+            )
+    return normalized
+
+
 def parse_listing(raw: Mapping[str, Any], position: int) -> Listing:
     """Превращает сырой объект каталога в типизированный :class:`Listing`.
 
     Границы §2.2: ``price_rub`` — положительное целое (bool не число),
-    ``attributes`` — объект, остальные поля — непустые строки где положено.
+    ``attributes`` — объект с типами по §2 (см. :func:`normalize_attributes`),
+    остальные поля — непустые строки где положено.
     Ошибки каталога — технический сбой (exit != 0), а не ``no_match``.
 
-    Сложность: O(1) на объявление.
+    Сложность: O(1) на объявление (характеристик всегда единицы).
     """
     where = f"объявление #{position}"
     if not isinstance(raw, dict):
@@ -229,7 +304,7 @@ def parse_listing(raw: Mapping[str, Any], position: int) -> Listing:
         description=description,
         price_rub=price,
         city_id=city_id,
-        attributes=attributes,
+        attributes=normalize_attributes(attributes, f"{where} ({listing_id})"),
     )
 
 

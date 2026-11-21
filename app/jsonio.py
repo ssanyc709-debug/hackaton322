@@ -61,6 +61,10 @@ def loads_strict(text: str, *, source: str = "json") -> Any:
         raise
     except json.JSONDecodeError as exc:
         raise JsonError(f"{source}: некорректный JSON (строка {exc.lineno}, колонка {exc.colno}): {exc.msg}") from exc
+    except RecursionError as exc:
+        # Контракт §2: глубокая вложенность — это некорректный JSON, а не сбой ядра.
+        # Без этого перехвата процесс падал бы с трассировкой вместо сообщения в stderr.
+        raise JsonError(f"{source}: слишком глубокая вложенность JSON") from exc
 
 
 def load_json_file(path: Path, *, source: str | None = None) -> Any:
@@ -69,6 +73,12 @@ def load_json_file(path: Path, *, source: str | None = None) -> Any:
         text = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise JsonError(f"{source or path}: не удалось прочитать файл: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        # Контракт §1: не-UTF-8 вход — технический сбой с понятным сообщением,
+        # а не трассировка исключения в stderr.
+        raise JsonError(
+            f"{source or path}: файл не в UTF-8 ({exc.reason} на байте {exc.start})"
+        ) from exc
     return loads_strict(text, source=source or str(path))
 
 
@@ -133,6 +143,8 @@ def json_from(
         except json.JSONDecodeError:
             position = start + 1
             continue
+        except RecursionError as exc:
+            raise JsonError(f"{source}: слишком глубокая вложенность JSON") from exc
         except JsonError as exc:
             raise JsonError(f"{source}: {exc}") from exc
         if isinstance(value, dict):

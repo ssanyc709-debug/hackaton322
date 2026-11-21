@@ -315,18 +315,38 @@ class NumbersTest(unittest.TestCase):
         self.assertEqual(fits.get("status"), "ok", fits)
         self.assertEqual(short.get("status"), "no_match", short)
 
-    @unittest.skip("БАГ №2 (docs/QA-ERRORS.md): «от 5000 ₽» становится потолком бюджета")
     def test_lower_bound_of_budget_is_not_a_cap(self) -> None:
         """«От 5000 ₽» — это не потолок (бюджет по §3 — верхний предел).
 
-        Сейчас такая фраза даёт бюджет 5 000 ₽, и покупатель, просивший «не
-        дешевле», получает самые дешёвые комплекты. Ожидается: бюджет остаётся
+        Такая фраза раньше давала бюджет 5 000 ₽, и покупатель, просивший «не
+        дешевле», получал самые дешёвые комплекты. Ожидается: бюджет остаётся
         неизвестным, и помощник спрашивает его отдельно.
         """
         document = document_for("Стол в Таганроге, от 5000 ₽")
         self.assertEqual(document.get("status"), "clarify", document)
         fields = {question["field"] for question in document["questions"]}
         self.assertIn("budget_rub", fields, "бюджет неизвестен — его нужно спросить")
+
+    def test_lower_bound_without_currency_is_not_a_cap(self) -> None:
+        """То же правило, когда валюта не написана: «бюджет от 5000», «дороже 5000».
+
+        Нижняя граница без единицы попадает в «нейтральные» числа и раньше
+        подставлялась как потолок уже на шаге :mod:`app.nlp.extract`.
+        """
+        for query in ("Стол в Таганроге, бюджет от 5000", "Стол в Таганроге дороже 5000"):
+            with self.subTest(query=query):
+                document = document_for(query)
+                self.assertEqual(document.get("status"), "clarify", document)
+                fields = {question["field"] for question in document["questions"]}
+                self.assertIn("budget_rub", fields, "бюджет неизвестен — его нужно спросить")
+
+    def test_budget_pair_still_caps_at_the_upper_bound(self) -> None:
+        """«От 3000 до 5000 ₽» — потолок по-прежнему 5 000 (нижняя граница его не отменяет)."""
+        document = document_for("Стол в Таганроге от 3000 до 5000 ₽")
+        self.assertEqual(document.get("status"), "ok", document)
+        for option in document["options"]:
+            with self.subTest(option=option["listing_ids"]):
+                self.assertLessEqual(option["total_rub"], 5000)
 
     def test_simultaneous_constraints_are_all_applied(self) -> None:
         """§2.2: «поддерживаются одновременные ограничения» — по одной характеристике на категорию."""
@@ -355,39 +375,34 @@ class NumbersTest(unittest.TestCase):
 
 
 class LowerBoundRegressionTest(AttributeTests):
-    """Регрессия БАГ №1: нижняя граница теряется, если «до <бюджет>» стоит далеко.
+    """Регрессия БАГ №1: нижняя граница терялась, если «до <бюджет>» стоит далеко.
 
-    Причина (``app/nlp/numbers.py::_merge_pairs``): нижняя граница ищет пару среди
-    последующих верхних границ; если ближайшая из них дальше
-    ``MAX_RANGE_GAP_TOKENS`` токенов, цикл делает ``break``, и одиночная нижняя
-    граница в результат не попадает — условие исчезает молча.
+    Причина была в ``app/nlp/numbers.py::_merge_pairs``: нижняя граница искала пару
+    среди последующих верхних границ; если ближайшая из них дальше
+    ``MAX_RANGE_GAP_TOKENS`` токенов, цикл делал ``break``, ветка ``else`` у ``for``
+    после ``break`` не выполнялась, и одиночная нижняя граница в результат не
+    попадала — условие исчезало молча.
 
-    Тесты описывают ТРЕБУЕМОЕ поведение (CONTRACT §2.2) и помечены ``skip``,
-    потому что код продукта по решению владельца не правится (см.
-    ``docs/QA-ERRORS.md``, БАГ №1).
+    Дефект закрыт: «пара не найдена» проверяется явным флагом (см.
+    ``docs/QA-ERRORS.md``, БАГ №1). Тесты описывают требование CONTRACT §2.2.
     """
 
-    @unittest.skip("БАГ №1 (docs/QA-ERRORS.md): «от 100 см» теряется, если бюджет задан словом «до»")
     def test_lower_inclusive_width_survives_a_distant_budget(self) -> None:
         query = "Стол от 100 см в Таганроге до 15 000 ₽"
         self.assert_every_item(query, "width_cm", lambda value: value >= 100, "уже 100 см")
 
-    @unittest.skip("БАГ №1 (docs/QA-ERRORS.md): «шире 100 см» теряется, если бюджет задан словом «до»")
     def test_lower_strict_width_survives_a_distant_budget(self) -> None:
         query = "Стол шире 100 см в Таганроге до 15 000 ₽"
         self.assert_every_item(query, "width_cm", lambda value: value > 100, "не шире 100 см")
 
-    @unittest.skip("БАГ №1 (docs/QA-ERRORS.md): «не уже 90 см» теряется, если бюджет задан словом «до»")
     def test_lower_inclusive_width_in_a_combined_query_survives(self) -> None:
         query = "Стол не уже 90 см в Таганроге до 15 000 ₽"
         self.assert_every_item(query, "width_cm", lambda value: value >= 90, "уже 90 см")
 
-    @unittest.skip("БАГ №1 (docs/QA-ERRORS.md): «от 4000 K» теряется, если бюджет задан словом «до»")
     def test_lower_temperature_bound_survives_a_distant_budget(self) -> None:
         query = "Лампа от 4000 K в Таганроге до 15 000 ₽"
         self.assert_every_item(query, "color_temperature_k", lambda value: value >= 4000, "ниже 4000 K")
 
-    @unittest.skip("БАГ №1 (docs/QA-ERRORS.md): нижняя граница теряется при любой формулировке")
     def test_lower_bound_is_not_lost_for_any_phrasing(self) -> None:
         """Все формулировки нижней границы должны переживать бюджет, заданный словом «до»."""
         cases = (
