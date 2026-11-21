@@ -40,7 +40,7 @@ from app.config import (
 from app.jsonio import JsonError, json_from, loads_strict
 from app.model import CATEGORIES, Slots
 from app.nlp.extract import Resolver
-from app.prompt_safety import EXTRACTION_SCHEMA, EXTRACTION_SCHEMA_NAME, SYSTEM_PROMPT
+from app.prompt_safety import CATEGORY_SCHEMA, EXTRACTION_SCHEMA, EXTRACTION_SCHEMA_NAME, SYSTEM_PROMPT
 
 #: Лимиты LLM_API.md, которые не заданы в конфигурации, но обязательны.
 MAX_MESSAGES = 40
@@ -270,21 +270,18 @@ def make_resolver(
     *,
     complete_fn: Callable[..., dict[str, Any]] = complete,
 ) -> Resolver:
-    """Оборачивает клиент в функцию ``resolver`` для ``extract_message``.
-
-    В модель уходят ровно два сообщения: сжатый системный промпт и текст
-    реплики. Уже известные условия не передаются — они не нужны модели
-    (заполнение идёт только для недостающих полей, локальные значения не
-    перетираются) и стоили бы лишних токенов. Каталог и описания объявлений
-    не передаются никогда.
-
-    Совместимость: подпись ``(text, slots) -> dict`` совпадает с
-    :data:`app.nlp.extract.Resolver`; ``slots`` не используется.
-    """
+    """Заполняет недостающие категории по фразе покупателя."""
     system_message = {"role": "system", "content": SYSTEM_PROMPT}
 
     def resolve(text: str, slots: Slots) -> dict[str, Any]:  # noqa: ARG001 — подпись Resolver
-        return complete_fn(config, [system_message, {"role": "user", "content": text}], deadline)
+        return complete_fn(
+            config,
+            [system_message, {"role": "user", "content": text}],
+            deadline,
+            schema=CATEGORY_SCHEMA,
+            schema_name="buyer_categories",
+            sanitize=_sanitize_categories,
+        )
 
     resolve.__doc__ = "Один вызов модели для одной реплики покупателя (§5)."
     return resolve
@@ -420,12 +417,18 @@ def _sanitize_slots(raw: Mapping[str, Any]) -> dict[str, Any]:
     budget = raw.get("budget_rub")
     if isinstance(budget, int) and not isinstance(budget, bool) and 0 < budget <= MAX_PRICE_RUB:
         result["budget_rub"] = budget
-    categories = raw.get("categories")
-    if isinstance(categories, list):
-        valid = [item for item in categories if isinstance(item, str) and item in CATEGORIES]
-        if valid:
-            result["categories"] = valid[:3]
+    categories = _sanitize_categories(raw).get("categories")
+    if categories:
+        result["categories"] = categories
     return result
+
+
+def _sanitize_categories(raw: Mapping[str, Any]) -> dict[str, Any]:
+    categories = raw.get("categories")
+    if not isinstance(categories, list):
+        return {}
+    valid = [item for item in categories if isinstance(item, str) and item in CATEGORIES]
+    return {"categories": valid[:len(CATEGORIES)]} if valid or not categories else {}
 
 
 def _error_from_response(status: int, body: bytes, api_key: str, attempts: int) -> LlmError:

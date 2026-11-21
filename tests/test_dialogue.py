@@ -145,8 +145,30 @@ class ModelCallPolicyTest(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(slots.city_id, "taganrog")
         self.assertEqual(slots.budget_rub, 12000)
-        self.assertIn("Хочу обставить кабинет в Таганроге", self.calls[0])
-        self.assertIn("12 тысяч", self.calls[0])
+        self.assertEqual(self.calls, ["Хочу обставить кабинет в Таганроге"])
+
+    def test_model_context_preserves_description_and_product_followup(self) -> None:
+        slots = merge_history(
+            ["Нужна штука, чтобы читать вечером. Ростов-на-Дону.", "Узкий луч, чтобы не будить соседа.",
+             "ну давай до 10 000р", "Спасибо"],
+            resolver=lambda text, state: self.calls.append(text) or {"categories": ["lamp"]},
+        )
+        self.assertEqual(self.calls, ["Нужна штука, чтобы читать вечером. / Узкий луч, чтобы не будить соседа."])
+        self.assertEqual(slots.categories, ("lamp",))
+        self.assertEqual(slots.city_id, "rostov-na-donu")
+        self.assertEqual(slots.budget_rub, 10000)
+
+    def test_recognized_seat_description_costs_zero_calls(self) -> None:
+        for text in ("Нужно сиденье со спинкой. Таганрог, до 10000.", "Нужно сиденье со спинкой в Таганроге до 10000."):
+            with self.subTest(text=text):
+                slots = merge_history([text], resolver=self.resolver)
+                self.assertEqual(self.calls, [])
+                self.assertEqual(slots.categories, ("chair",))
+
+    def test_city_and_budget_alone_do_not_call_model(self) -> None:
+        slots = merge_history(["В Ростове-на-Дону.", "До 10 000 ₽."], resolver=self.resolver)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(slots.categories, ())
 
     def test_no_call_in_offline_mode(self) -> None:
         merge_history(["Хочу мебель"], resolver=self.resolver, allow_model=False)

@@ -242,17 +242,26 @@ class SuccessTest(GatewayTestCase):
 
     def test_resolver_sends_only_prompt_and_text(self) -> None:
         """Каталог и описания объявлений в модель не уходят вообще (0 лишних токенов)."""
-        self.gateway.enqueue(200, envelope({"city_id": "azov", "budget_rub": 9000, "categories": ["chair"]}))
+        self.gateway.enqueue(200, envelope({"city_id": "azov", "budget_rub": 9000, "categories": ["chair", "lamp"]}))
         resolver = make_resolver(self.config, self.deadline, complete_fn=complete)
-        slots = resolver("Кресло в Азове до 9000", Slots())
-        self.assertEqual(slots["city_id"], "azov")
+        slots = resolver("Нужно на чем сидеть и чем осветить книгу", Slots(city_id="azov", budget_rub=9000))
+        self.assertEqual(slots, {"categories": ["chair", "lamp"]})
         body = self.gateway.body_json
         self.assertEqual(len(body["messages"]), 2)
-        self.assertEqual(body["messages"][1], {"role": "user", "content": "Кресло в Азове до 9000"})
+        self.assertEqual(body["messages"][1], {"role": "user", "content": "Нужно на чем сидеть и чем осветить книгу"})
+        schema = body["response_format"]["json_schema"]
+        self.assertTrue(schema["strict"])
+        self.assertEqual(set(schema["schema"]["properties"]), {"categories"})
+        self.assertEqual(schema["schema"]["required"], ["categories"])
         serialized = json.dumps(body, ensure_ascii=False)
         self.assertNotIn("listing", serialized)
         self.assertNotIn("description", serialized)
         self.assertNotIn("t12", serialized)
+
+    def test_resolver_accepts_empty_categories_for_clarification(self) -> None:
+        self.gateway.enqueue(200, envelope({"categories": []}))
+        resolver = make_resolver(self.config, self.deadline)
+        self.assertEqual(resolver("Нужно что-нибудь для комнаты", Slots()), {"categories": []})
 
 
 class ModelOutputTest(GatewayTestCase):
@@ -492,7 +501,7 @@ class CliModelPathTest(unittest.TestCase):
     def test_model_completes_the_request(self) -> None:
         self.gateway.enqueue(
             200,
-            envelope({"city_id": "taganrog", "budget_rub": 15000, "categories": ["table", "chair", "lamp"]}),
+            envelope({"categories": ["table", "chair", "lamp"]}),
         )
         with tempfile.TemporaryDirectory() as cache_dir:
             completed = self.run_cli(self.request(), cache_dir=cache_dir)

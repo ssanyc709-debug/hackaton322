@@ -109,6 +109,12 @@ PHRASE_CATEGORIES: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
 )
 
+# Название отдельного предмета в короткой реплике. Узкие границы исключают,
+# например, «чехол на сиденье со спинкой» и «не нужно сиденье со спинкой».
+_SEAT_WITH_BACK = re.compile(
+    r"(?:^|[.!?]\s*)(?:нужн[оа]|хочу|ищу)\s+сиден(?:ье|ие)\s+со\s+спинкой\b"
+)
+
 #: Основы команд «снять ограничение»: «расширим ширину», «убери регулировку».
 REMOVAL_CUE_STEMS: tuple[str, ...] = (
     "расшир", "убер", "убир", "убра", "сним", "снят", "откаж", "неважн",
@@ -210,6 +216,13 @@ def _lexicon_slots(normalized: str) -> Slots:
         city_unknown = foreign_city_hits[-1].value
 
     categories = order_categories(hit.value for hit in category_hits)
+    seat = _SEAT_WITH_BACK.search(normalized)
+    if seat:
+        tail = normalized[seat.end():].lstrip()
+        if not tail or tail[0] in ",.!?" or (
+            tail.startswith(("в ", "во ")) and len(tokenize(normalized[:seat.end()])) + 1 in city_positions
+        ):
+            categories = order_categories((*categories, "chair"))
     phrase_categories = tuple(
         category for pattern, category in PHRASE_CATEGORIES if pattern.search(normalized)
     )
@@ -289,10 +302,9 @@ def _lexicon_slots(normalized: str) -> Slots:
         categories_unknown=categories_unknown,
         categories_removed=categories_removed,
         fields_removed=fields_removed,
-        categories_explicit=bool(category_hits)
+        categories_explicit=bool(categories)
         or bool(categories_removed)
-        or bool(categories_unknown)
-        or bool(phrase_categories),
+        or bool(categories_unknown),
         categories_additive=categories_additive,
         mentioned=frozenset(mentioned),
         source="lexicon",

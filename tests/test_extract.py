@@ -217,6 +217,11 @@ class PhraseCategoryTest(unittest.TestCase):
         slots = extract_message("нужен стол и на чём сидеть, Таганрог, до 20000")
         self.assertEqual(slots.categories, ("table", "chair"))
 
+    def test_seat_description_does_not_match_cover_or_refusal(self) -> None:
+        for text in ("Нужен чехол на сиденье со спинкой.", "Не нужно сиденье со спинкой."):
+            with self.subTest(text=text):
+                self.assertNotIn("chair", extract_message(text).categories)
+
 
 class CacheTest(unittest.TestCase):
     """Кэш разборов: повтор стоит 0 токенов и не меняет результат."""

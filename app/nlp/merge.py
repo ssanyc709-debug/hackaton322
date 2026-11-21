@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from typing import Iterable, Sequence
 
@@ -22,16 +23,21 @@ from app.model import (
 )
 from app.nlp.cache import LexiconCache
 from app.nlp.extract import (
+    CONFIRMATION_WORDS,
     MAX_MODEL_TEXT_BYTES,
     Resolver,
     extract_message,
     merge_model_slots,
     model_can_help,
 )
-from app.nlp.lexicon import order_categories
+from app.nlp.lexicon import get_lexicon, order_categories
+from app.nlp.numbers import FILLER_WORDS, MONEY_HINTS, UNIT_RUB, find_amounts, normalize_text, tokenize
 
 #: Разделитель реплик в одном тексте для модели: модель видит диалог одним куском.
 MODEL_TEXT_SEPARATOR = " / "
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?;])\s+|[\r\n]+")
+_CONDITION_WORDS = FILLER_WORDS | MONEY_HINTS | {"ну", "давай", "давайте", "город"}
+_ACKNOWLEDGMENTS = CONFIRMATION_WORDS - {"нет", "да"}
 
 
 def merge_history(
@@ -105,38 +111,51 @@ def dialogue_text(user_texts: Sequence[str]) -> str:
     return ""
 
 
+def _has_product_context(text: str) -> bool:
+    """Сохраняет фрагменты, которые могут уточнять товар или его характеристики."""
+    normalized = normalize_text(text)
+    tokens = tokenize(normalized)
+    if set(tokens) <= _ACKNOWLEDGMENTS:
+        return False
+
+    local = extract_message(text)
+    if local.mentioned - {FIELD_CITY, FIELD_BUDGET}:
+        return True
+
+    cities = get_lexicon().scan_cities(tokens)
+    known_positions = {hit.position for hit in cities}
+    for hit in cities:
+        if hit.value == "rostov-na-donu" and tokens[hit.position + 1:hit.position + 3] == ("на", "дону"):
+            known_positions.add(hit.position + 2)
+
+    budget_words: set[str] = set()
+    if local.budget_rub is not None:
+        for amount in find_amounts(normalized):
+            if amount.unit in (UNIT_RUB, None):
+                known_positions.update(range(amount.position, amount.position + len(amount.raw.split())))
+                budget_words.update(amount.trigger.split())
+
+    return any(
+        position not in known_positions and word not in _CONDITION_WORDS and word not in budget_words
+        for position, word in enumerate(tokens)
+    )
+
+
 def resolve_missing(state: Slots, user_texts: Sequence[str], resolver: Resolver) -> Slots:
-    """CORE. Дополняет условия ОДНИМ вызовом модели по всему диалогу (§5).
+    """CORE. Извлекает недостающие категории по содержательным фрагментам истории.
 
-    Зачем: fallback нужен только когда лексикон не закрыл обязательные условия
-    даже с учётом истории. Один вызов на запрос вместо вызова на каждую реплику
-    уменьшает расход токенов и число обращений к шлюзу (лимит 20 rpm), а модель
-    при этом видит диалог целиком, а не обрывок.
-
-    Вход:  state      — накопленные условия после слияния истории;
-           user_texts — реплики покупателя;
-           resolver   — клиент модели (``app.llm.client.make_resolver``).
-    Выход: слоты, дополненные тем, что нашла модель; при пустом ответе — те же.
-
-    Алгоритм: гейт :func:`model_can_help` (можно ли вообще закрыть недостающее) →
-    склейка диалога (:func:`dialogue_text`) → один вызов resolver →
-    :func:`merge_model_slots` (подтверждает категорию по закрытой таксономии).
-    Ошибка клиента не глушится: это техническая
-    ошибка запуска (CONTRACT.md §1), а не повод выдать ``no_match``.
-    Сложность: O(длина диалога) + один сетевой обмен; память O(слоты).
-    Почему именно он: решение «звать ли модель» принимается там, где видна вся
-    история, — в слиянии; поэтому диалог «Стол в Таганроге» + «12 тысяч» стоит
-    0 токенов, хотя ни одна его реплика по отдельности условий не закрывает.
-    Гейт допускает только описание неназванного товара при известном городе
-    и бюджете. При явно названном неподдерживаемом товаре задаётся вопрос.
-    Крайние случаи: пустой текст → вызова нет; все условия известны → False
-    из гейта; непустой ответ модели без нужных полей → условия остаются как
-    были (дальше ``clarify``).
-    Вызывается из: app/nlp/merge.py::merge_history, тесты, bench/load.py.
+    Город и бюджет уже известны локально. Фрагменты с описанием товара
+    передаются в хронологическом порядке одним запросом.
     """
     if not model_can_help(state):
         return state
-    text = dialogue_text(user_texts)
+    product_texts = [
+        part.strip()
+        for turn in user_texts
+        for part in _SENTENCE_BREAK.split(turn)
+        if _has_product_context(part)
+    ]
+    text = dialogue_text(product_texts)
     if not text:
         return state
     raw = resolver(text, state)
