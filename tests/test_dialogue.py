@@ -220,6 +220,96 @@ class ClarifyFlowTest(unittest.TestCase):
         self.assertTrue(any(option["listing_ids"] for option in document["options"]))
 
 
+class UnintelligibleMessageTest(unittest.TestCase):
+    """Мусорная реплика не подтверждает прежний набор категорий (§3).
+
+    Правило контракта: явное изменение условия заменяет прежнее значение,
+    остальные условия сохраняются. Реплика, в которой не распознано НИ ОДНОГО
+    условия и нет ни одного числа, не является подтверждением прежнего подбора:
+    иначе «ыаллфдылааввы» молча означает «продолжай, я согласен», и покупатель
+    получает прежний комплект вместо уточнения.
+
+    Ожидаемое поведение: категории считаются неизвестными → ``clarify`` по
+    ``categories``, а уже названные город и бюджет повторно не спрашиваются.
+    """
+
+    def fields(self, document: dict) -> list[str]:
+        self.assertEqual(document.get("status"), "clarify", document)
+        self.assertNotIn("options", document, "в статусе clarify комплектов быть не может")
+        return [question["field"] for question in document["questions"]]
+
+    def test_gibberish_after_complete_conditions_asks_categories(self) -> None:
+        document = run(["Стол до 5000. Таганрог.", "ыаллфдылааввы"])
+        self.assertEqual(self.fields(document), ["categories"])
+
+    def test_repeated_letters_after_complete_conditions_asks_categories(self) -> None:
+        document = run(["Стол до 5000. Таганрог.", "фффффф"])
+        self.assertEqual(self.fields(document), ["categories"])
+
+    def test_latin_gibberish_after_complete_conditions_asks_categories(self) -> None:
+        document = run(["Стол до 5000. Таганрог.", "asdfgh"])
+        self.assertEqual(self.fields(document), ["categories"])
+
+    def test_question_in_clarify_is_not_empty(self) -> None:
+        document = run(["Стол до 5000. Таганрог.", "ыаллфдылааввы"])
+        self.assertEqual(self.fields(document), ["categories"])
+        for question in document["questions"]:
+            self.assertTrue(question["text"].strip(), "вопрос без текста")
+
+    def test_gibberish_from_the_bug_report_with_assistant_reply(self) -> None:
+        """Точная последовательность из отчёта: реплика помощника между запросами."""
+        request = parse_request(
+            {
+                "messages": [
+                    {"role": "user", "text": "Стол до 5000. Таганрог."},
+                    {"role": "assistant", "text": "Готово."},
+                    {"role": "user", "text": "ыаллфдылааввы"},
+                ]
+            }
+        )
+        document = answer(request=request, index=INDEX, settings=SETTINGS, deadline=1e18)
+        self.assertEqual(self.fields(document), ["categories"])
+
+    def test_gibberish_without_conditions_asks_everything(self) -> None:
+        """Прежних условий нет — спрашиваем все основные, как и раньше."""
+        document = run(["Хочу мебель", "ыаллфдылааввы"])
+        self.assertEqual(
+            self.fields(document),
+            ["budget_rub", "city_id", "categories"],
+        )
+
+
+class UnintelligibleRegressionTest(unittest.TestCase):
+    """Короткие осмысленные ответы обязаны остаться рабочими (§3).
+
+    Детектор «непонятной» реплики не должен ломать легитимные подтверждения:
+    число, «спасибо», «ок» — это ответы покупателя, а не мусор.
+    """
+
+    def test_numeric_answer_keeps_the_selection(self) -> None:
+        document = run(["Стол и кресло в Таганроге", "15 тысяч"])
+        self.assertEqual(document.get("status"), "ok", document)
+        self.assertTrue(document["options"], "ответ ok без вариантов")
+
+    def test_numeric_answer_after_width_and_categories(self) -> None:
+        document = run(["Стол не шире метра, кресло и лампа. Таганрог.", "15 тысяч"])
+        self.assertEqual(document.get("status"), "ok", document)
+
+    def test_thanks_keeps_the_selection(self) -> None:
+        document = run(["Стол до 5000. Таганрог.", "Спасибо!"])
+        self.assertEqual(document.get("status"), "ok", document)
+
+    def test_short_confirmation_keeps_the_selection(self) -> None:
+        document = run(["Стол до 5000. Таганрог.", "ок"])
+        self.assertEqual(document.get("status"), "ok", document)
+
+    def test_unsupported_category_in_one_message_still_asks_categories(self) -> None:
+        document = run(["Диван в Таганроге до 30000"])
+        self.assertEqual(document.get("status"), "clarify", document)
+        fields = [question["field"] for question in document["questions"]]
+        self.assertEqual(fields, ["categories"])
+
+
 class DialogueSelectionTest(unittest.TestCase):
     """Подбор по истории: все ограничения сохранены."""
 
