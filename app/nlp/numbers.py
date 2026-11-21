@@ -118,6 +118,11 @@ MONEY_HINTS = frozenset(
      "лимит", "лимитом", "всего", "итого", "максимум", "потрачу", "располагаю", "есть"}
 )
 
+#: Формы слова «температура» явно задают характеристику даже без «K».
+TEMPERATURE_WORDS = frozenset(
+    {"температура", "температуру", "температурой", "температуры", "температуре"}
+)
+
 #: Виды сравнения, из которых может получиться бюджет-потолок (§3: бюджет — это
 #: верхний предел суммы). Нижние границы сюда не входят: «от 5000 ₽» покупатель
 #: сказал, чтобы ему не предлагали дешевле, а не чтобы ограничить сверху.
@@ -209,6 +214,7 @@ class Amount:
     trigger: str
     position: int  # индекс токена, с которого началось число
     raw: str
+    following_position: int | None = None  # соседний токен без знака препинания
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,6 +401,8 @@ def _append_amount(
         value *= 100
         unit = UNIT_CM
     kind, trigger = _lookback_trigger(tokens, start)
+    if unit is None and trigger in TEMPERATURE_WORDS:
+        unit = UNIT_K
     amounts.append(
         Amount(
             value=int(round(value)),
@@ -447,11 +455,11 @@ def _lookback_trigger(tokens: Sequence[str], number_index: int) -> tuple[str, st
     if width_word is not None:
         # Слово «ширина» сильнее денежной подсказки: «ширина до 250» — про стол.
         return trigger_kind, width_word
+    for token in reversed(window):
+        if token in TEMPERATURE_WORDS or token in MONEY_HINTS:
+            return trigger_kind, token
     if trigger_phrase:
         return trigger_kind, trigger_phrase
-    for token in reversed(window):
-        if token in MONEY_HINTS:
-            return NO_TRIGGER, token
     return NO_TRIGGER, ""
 
 
@@ -602,7 +610,14 @@ def find_amounts(text: str) -> tuple[Amount, ...]:
             continue
 
         index = _append_amount(amounts, tokens, index, value, next_index)
-    return tuple(_join_dash_ranges(amounts, normalized, spans, tokens))
+    result = _join_dash_ranges(amounts, normalized, spans, tokens)
+    for index, amount in enumerate(result):
+        following = amount.position + len(amount.raw.split())
+        if following < len(spans):
+            gap = normalized[spans[following - 1][1]:spans[following][0]]
+            if not gap or gap.isspace():
+                result[index] = replace(amount, following_position=following)
+    return tuple(result)
 
 
 def _inherit_multiplier(

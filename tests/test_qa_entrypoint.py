@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import unittest
 
+from app.main import EXIT_CATALOG, EXIT_CONFIG, EXIT_INPUT
 from tests.test_qa_support import (
     CATALOG_PATH,
     EXIT_OK,
@@ -113,7 +114,7 @@ class MainModuleContractTest(unittest.TestCase):
                 self.assertTrue(listing_id.startswith("qa-"), f"ID {listing_id} не из переданного каталога")
 
     def test_broken_input_exits_nonzero_with_empty_stdout(self) -> None:
-        """Битый вход: ненулевой код и пустой stdout (конкретное число не фиксируем)."""
+        """Битый вход даёт код 2 и пустой stdout."""
         payloads = {
             "not_json": b'{"messages": [}',
             "not_object": b"[]",
@@ -128,9 +129,31 @@ class MainModuleContractTest(unittest.TestCase):
         for name, payload in payloads.items():
             with self.subTest(case=name):
                 result = run_cli(payload, cache_dir=cache_dir(self))
-                self.assertNotEqual(result.code, EXIT_OK, f"{name}: битый вход не должен давать код 0")
+                self.assertEqual(result.code, EXIT_INPUT, name)
                 self.assertEqual(result.stdout, b"", f"{name}: stdout должен быть пустым")
                 self.assertTrue(result.stderr.strip(), f"{name}: причина должна быть в stderr")
+
+    def test_missing_catalog_has_exit_code_three(self) -> None:
+        path = make_temp_dir(self) / "missing.json"
+        result = run_cli(ask(NO_MATCH_QUERY), catalog=path, cache_dir=cache_dir(self))
+        self.assertEqual(result.code, EXIT_CATALOG)
+        self.assertEqual(result.stdout, b"")
+
+    def test_invalid_config_has_exit_code_four(self) -> None:
+        result = run_cli(
+            ask(NO_MATCH_QUERY), cache_dir=cache_dir(self),
+            extra_env={"LLM_BASE_URL": "http://example.invalid/v1"},
+        )
+        self.assertEqual(result.code, EXIT_CONFIG)
+        self.assertEqual(result.stdout, b"")
+
+    def test_empty_catalog_is_valid(self) -> None:
+        path = write_catalog(make_temp_dir(self), [])
+        for query, status in ((NO_MATCH_QUERY, "no_match"), ("Стол", "clarify")):
+            with self.subTest(status=status):
+                result = run_cli(ask(query), catalog=path, cache_dir=cache_dir(self))
+                self.assertEqual(result.code, EXIT_OK, result.stderr)
+                self.assertEqual(result.one_json_object()["status"], status)
 
 
 if __name__ == "__main__":

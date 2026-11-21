@@ -108,6 +108,16 @@ class LexiconLookupTest(unittest.TestCase):
     def test_azov(self) -> None:
         self.assertEqual(self.cities("в Азове"), ["azov"])
 
+    def test_city_adjectives_do_not_imply_a_city(self) -> None:
+        for text in ("в Азовском", "Ростовский", "Азовское"):
+            with self.subTest(text=text):
+                self.assertEqual(self.cities(text), [])
+
+    def test_city_typos_and_case_forms_remain_supported(self) -> None:
+        for text, expected in (("таганрг", "taganrog"), ("в Таганроги", "taganrog"), ("азове", "azov")):
+            with self.subTest(text=text):
+                self.assertEqual(self.cities(text), [expected])
+
     def test_categories_in_any_form(self) -> None:
         self.assertEqual(self.categories("стол, кресло и лампа"), ("table", "chair", "lamp"))
         self.assertEqual(self.categories("столы, кресла, лампы"), ("table", "chair", "lamp"))
@@ -133,6 +143,12 @@ class LexiconLookupTest(unittest.TestCase):
         hits = self.lexicon.scan_unsupported_cities(scan("нужен стол в Москве"))
         self.assertEqual([hit.value for hit in hits], ["москва"])
         self.assertEqual(self.cities("нужен стол в Москве"), [])
+
+    def test_live_words_do_not_create_unsupported_names(self) -> None:
+        self.assertEqual(self.lexicon.scan_unsupported_categories(scan("полоса, матрос, кровли")), ())
+        self.assertEqual(self.lexicon.scan_unsupported_cities(scan("пример, шахтер")), ())
+        self.assertEqual(self.cities("азотом"), [])
+        self.assertEqual(self.categories("сто, стал, ламповый, люстровый"), ())
 
     def test_mat_does_not_become_a_product(self) -> None:
         text = "бля, срочно нужен сраный стол и кресло"

@@ -1,54 +1,54 @@
 {
-  "total": 228,
-  "full_match": 228,
+  "total": 237,
+  "full_match": 237,
   "full_match_rate": 1.0,
   "safety": 1.0,
   "penalty": 0,
   "dangerous": 0,
   "fields": {
     "adjustable": {
-      "total": 228,
-      "correct": 228,
+      "total": 237,
+      "correct": 237,
       "accuracy": 1.0,
       "false_positive": 0,
       "false_negative": 0,
       "wrong_value": 0
     },
     "budget": {
-      "total": 228,
-      "correct": 228,
+      "total": 237,
+      "correct": 237,
       "accuracy": 1.0,
       "false_positive": 0,
       "false_negative": 0,
       "wrong_value": 0
     },
     "categories": {
-      "total": 228,
-      "correct": 228,
+      "total": 237,
+      "correct": 237,
       "accuracy": 1.0,
       "false_positive": 0,
       "false_negative": 0,
       "wrong_value": 0
     },
     "city": {
-      "total": 228,
-      "correct": 228,
+      "total": 237,
+      "correct": 237,
       "accuracy": 1.0,
       "false_positive": 0,
       "false_negative": 0,
       "wrong_value": 0
     },
     "temperature": {
-      "total": 228,
-      "correct": 228,
+      "total": 237,
+      "correct": 237,
       "accuracy": 1.0,
       "false_positive": 0,
       "false_negative": 0,
       "wrong_value": 0
     },
     "width": {
-      "total": 228,
-      "correct": 228,
+      "total": 237,
+      "correct": 237,
       "accuracy": 1.0,
       "false_positive": 0,
       "false_negative": 0,
@@ -77,8 +77,8 @@
       "accuracy": 1.0
     },
     "hard": {
-      "total": 51,
-      "correct": 51,
+      "total": 60,
+      "correct": 60,
       "accuracy": 1.0
     },
     "mixed": {
@@ -103,8 +103,8 @@
     }
   },
   "statuses": {
-    "clarify": 7,
-    "no_match": 1,
+    "clarify": 13,
+    "no_match": 2,
     "ok": 12
   }
 }

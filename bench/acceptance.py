@@ -990,8 +990,8 @@ def check_technical_inputs(
     not_array_catalog = folder / "not-array.json"
     not_array_catalog.write_text('{"listings": []}', encoding="utf-8")
 
-    empty_catalog = folder / "empty-array.json"
-    empty_catalog.write_text("[]", encoding="utf-8")
+    empty_file = folder / "empty-file.json"
+    empty_file.write_bytes(b"")
 
     cases: list[tuple[str, bytes, Path]] = [
         # §1: сбой на входе.
@@ -1002,7 +1002,7 @@ def check_technical_inputs(
         # §1/§2: сбой каталога.
         ("каталог не найден", VALID_REQUEST, folder / "missing-catalog.json"),
         ("каталог не массив", VALID_REQUEST, not_array_catalog),
-        ("каталог пуст", VALID_REQUEST, empty_catalog),
+        ("пустой файл каталога", VALID_REQUEST, empty_file),
         ("каталог не в UTF-8", VALID_REQUEST, utf16_catalog),
         ("глубокая вложенность", b"[" * 50_000, valid_catalog),
         # §2: типы характеристик — тоже часть контракта каталога.

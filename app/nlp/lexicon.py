@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
 from app.model import CATEGORIES
+from app.nlp.numbers import FILLER_WORDS, WORD_NUMBERS
 
 #: Города из data/cities.json: формы, которые встречаются в живой речи.
 CITY_WORDS: dict[str, tuple[str, ...]] = {
@@ -64,6 +65,11 @@ CATEGORY_ADJECTIVE_WORDS: tuple[str, ...] = (
     "рабочий", "письменный", "компьютерный", "обеденный",
 )
 
+#: Окончания относительных прилагательных, например «Азовском», «Ростовский».
+CITY_ADJECTIVE_SUFFIXES: tuple[str, ...] = (
+    "ский", "ская", "ское", "ские", "ских", "ским", "ского", "ской", "ском",
+)
+
 #: Конкретные предметы вне таксономии: покупатель явно просит не то, что умеем —
 #: это ``clarify`` по полю ``categories``, а не «нет совпадений».
 UNSUPPORTED_CATEGORY_WORDS: dict[str, tuple[str, ...]] = {
@@ -106,6 +112,7 @@ UNSUPPORTED_CITY_WORDS: dict[str, tuple[str, ...]] = {
     "батайск": ("батайск", "батайске"),
     "новочеркасск": ("новочеркасск", "новочеркасске"),
     "шахты": ("шахты", "шахтах"),
+    "тула": ("тула", "туле", "тулы", "тулу", "тулой"),
 }
 
 #: Мат и шум: не должны ни ломать разбор, ни становиться товаром.
@@ -144,6 +151,7 @@ GUARD_WORDS: tuple[str, ...] = (
     "стоять", "стойка",
     # Служебные слова и живые реакции: не могут быть названием товара.
     "пока", "стоп", "просто", "привет", "сама", "старая", "дрова",
+    "азот", "стать", "кровля", "кровли", "ламповый", "люстровый",
 )
 
 #: Минимальная длина слова для нечёткого поиска: короткие слова слишком шумные.
@@ -427,17 +435,17 @@ class WordIndex:
                 self._trigram_index.setdefault(gram, set()).add(form)
             self._keys.add(form)
 
-    def lookup(self, word: str) -> tuple[str, str, str]:
+    def lookup(self, word: str, *, allow_fuzzy: bool = True) -> tuple[str, str, str]:
         """Ищет значение слова: точная форма → стем → нечёткий поиск.
 
         Возвращает ``(значение, способ, ключ)``; ключ — форма словаря, по которой
-        нашлось совпадение (для fuzzy это важно: опечатка товара или чужое слово).
+        нашлось совпадение. При отключённом fuzzy остаются точные формы и основы.
         """
         for form in candidate_forms(word):
             value = self._exact.get(form)
             if value is not None:
                 return value, ("exact" if form == word else "stem"), form
-        if len(word) < MIN_FUZZY_LENGTH:
+        if not allow_fuzzy or len(word) < MIN_FUZZY_LENGTH:
             return "", "", ""
         return self._fuzzy(word)
 
@@ -516,8 +524,14 @@ class Lexicon:
         )
 
     def scan_cities(self, tokens: Sequence[str]) -> tuple[Hit, ...]:
-        """Все упоминания города в порядке текста."""
-        return self._scan(tokens, self.cities)
+        """Распознаёт города по нормализованным токенам в порядке текста.
+
+        Для относительных прилагательных («в Азовском районе») пропускает
+        нечёткие совпадения. Падежные формы («в Азове») и опечатки названий
+        («таганрг») распознаются. Сложность O(числа токенов) при фиксированном
+        словаре и ограниченной длине токена.
+        """
+        return self._scan(tokens, self.cities, adjective_suffixes=CITY_ADJECTIVE_SUFFIXES)
 
     def scan_categories(self, tokens: Sequence[str]) -> tuple[Hit, ...]:
         """Все упоминания поддерживаемых категорий в порядке текста.
@@ -529,34 +543,44 @@ class Lexicon:
         return self._scan(tokens, self.categories, reject_fuzzy=self.category_adjectives)
 
     def scan_unsupported_categories(self, tokens: Sequence[str]) -> tuple[Hit, ...]:
-        """Упоминания предметов вне таксономии (диван, шкаф, кровать…)."""
-        return self._scan(tokens, self.unsupported_categories)
+        """Находит предметы вне таксономии по словоформам, например «дивана»."""
+        return self._scan(tokens, self.unsupported_categories, allow_fuzzy=False)
 
     def scan_unsupported_cities(self, tokens: Sequence[str]) -> tuple[Hit, ...]:
-        """Упоминания городов вне справочника (Москва, Питер…)."""
-        return self._scan(tokens, self.unsupported_cities)
+        """Находит города вне справочника по словоформам, например «в Москве»."""
+        return self._scan(tokens, self.unsupported_cities, allow_fuzzy=False)
 
     def _scan(
         self,
         tokens: Sequence[str],
         index: WordIndex,
         reject_fuzzy: frozenset[str] = frozenset(),
+        adjective_suffixes: tuple[str, ...] = (),
+        *,
+        allow_fuzzy: bool = True,
     ) -> tuple[Hit, ...]:
         """Линейный проход по токенам; шум и служебные слова пропускаются.
 
         ``reject_fuzzy`` — ключи словаря, совпадение с которыми не считается
-        опечаткой (прилагательные категорий).
+        опечаткой (прилагательные категорий). ``adjective_suffixes`` — окончания
+        токенов, для которых допускаются только точные совпадения и совпадения
+        по основе. ``allow_fuzzy`` отключает нечёткий поиск для всего индекса.
+        Результат сохраняет порядок токенов.
         """
         hits: list[Hit] = []
         for position, token in enumerate(tokens):
             if token in self.noise or token in self.guards or len(token) < 3:
                 continue
+            if token in FILLER_WORDS or token in WORD_NUMBERS:
+                continue
             if not token.isalpha():
                 continue
-            value, how, matched = index.lookup(token)
+            value, how, matched = index.lookup(token, allow_fuzzy=allow_fuzzy)
             if not value:
                 continue
             if how == "fuzzy" and matched in reject_fuzzy:
+                continue
+            if how == "fuzzy" and token.endswith(adjective_suffixes):
                 continue
             # Омонимы («совет», «цвет») проверяются по формам и только после
             # совпадения: стемминг всех токенов подряд стоил бы времени зря.

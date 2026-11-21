@@ -67,6 +67,11 @@ class ExtractCityAndCategoriesTest(unittest.TestCase):
         slots = extract_message("Стол в Таганроге, но лучше в Азове, до 20000")
         self.assertEqual(slots.city_id, "azov")
 
+    def test_city_adjective_leaves_only_city_to_clarify(self) -> None:
+        slots = extract_message("В Азовском, стол до 5000")
+        self.assertIsNone(slots.city_id)
+        self.assertEqual(missing_fields(slots), (FIELD_CITY,))
+
     def test_unknown_city_is_flagged(self) -> None:
         slots = extract_message("Нужен стол в Москве до 10000")
         self.assertIsNone(slots.city_id)
@@ -90,8 +95,19 @@ class ExtractCityAndCategoriesTest(unittest.TestCase):
         self.assertTrue(is_complete(slots))
 
     def test_quantity_is_not_a_budget(self) -> None:
-        slots = extract_message("нужны 2 кресла в Азове")
-        self.assertIsNone(slots.budget_rub)
+        for quantity in ("3 кресла", "до 3 кресел", "2 стола", "1500 кресел", "1500 штук кресел"):
+            with self.subTest(quantity=quantity):
+                slots = extract_message(f"Нужно {quantity} в Азове")
+                self.assertIsNone(slots.budget_rub)
+                self.assertEqual(missing_fields(slots), (FIELD_BUDGET,))
+
+    def test_budget_before_a_comma_is_not_a_quantity(self) -> None:
+        slots = extract_message("Таганрог, 1500, кресло")
+        self.assertEqual(slots.budget_rub, 1500)
+
+    def test_explicit_monetary_context_allows_small_amounts(self) -> None:
+        self.assertEqual(extract_message("Бюджет до 900").budget_rub, 900)
+        self.assertIsNone(extract_message("До 900").budget_rub)
 
     def test_mat_does_not_break_extraction(self) -> None:
         slots = extract_message("Бля, срочно нужен сраный стол и кресло в Таганроге, до 10000")
@@ -123,15 +139,24 @@ class ExtractAttributeTest(unittest.TestCase):
         self.assertEqual(slots.color_temperature.lower.value, 4000)
         self.assertEqual(slots.color_temperature.upper.value, 4000)
 
-    def test_temperature_range_without_unit_uses_lamp_context(self) -> None:
-        slots = extract_message("лампа от 3000 до 5000, Таганрог, до 5000 рублей")
+    def test_explicit_temperature_range_without_unit(self) -> None:
+        slots = extract_message("лампа с температурой от 3000 до 5000, Таганрог, до 5000 рублей")
         assert slots.color_temperature is not None
         self.assertEqual(slots.color_temperature.lower.value, 3000)
         self.assertEqual(slots.color_temperature.upper.value, 5000)
 
-    def test_impossible_width_is_dropped(self) -> None:
+    def test_unlabelled_temperature_range_is_ambiguous(self) -> None:
+        for suffix, budget in (("", None), (", до 5000 рублей", 5000)):
+            with self.subTest(suffix=suffix):
+                slots = extract_message(f"Лампа от 3000 до 5000, Таганрог{suffix}")
+                self.assertIsNone(slots.color_temperature)
+                self.assertEqual(slots.budget_rub, budget)
+
+    def test_explicit_width_is_kept_even_if_catalogue_cannot_match(self) -> None:
         slots = extract_message("стол шириной 100 метров, Таганрог, до 20000")
-        self.assertIsNone(slots.width)
+        assert slots.width is not None
+        self.assertEqual(slots.width.lower.value, 10000)
+        self.assertEqual(slots.width.upper.value, 10000)
 
     def test_adjustable_true(self) -> None:
         slots = extract_message("кресло с регулировкой высоты, Таганрог, до 20000")
@@ -265,7 +290,7 @@ class ModelFallbackTest(unittest.TestCase):
 
     def resolver(self, text: str, slots) -> dict[str, object]:
         self.calls.append(text)
-        return {"budget_rub": 12000}
+        return {"categories": ["table"], "budget_rub": 12000, "city_id": "azov"}
 
     def test_no_model_call_when_everything_is_known(self) -> None:
         slots = extract_message(EXAMPLE_01, resolver=self.resolver)
@@ -279,6 +304,9 @@ class ModelFallbackTest(unittest.TestCase):
         )
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(slots.source, "model")
+        self.assertEqual(slots.categories, ("table",))
+        self.assertEqual(slots.city_id, "taganrog")
+        self.assertEqual(slots.budget_rub, 15000)
 
     def test_no_model_call_when_budget_is_not_named(self) -> None:
         """В EXAMPLE_02 нет ни одного числа: бюджет взять неоткуда, вызов бесполезен."""
@@ -297,6 +325,17 @@ class ModelFallbackTest(unittest.TestCase):
         """Город вне справочника: подставлять другой город нельзя."""
         extract_message("Стол в Москве до 30000", resolver=self.resolver)
         self.assertEqual(self.calls, [])
+
+    def test_no_model_call_for_ambiguous_primary_fields(self) -> None:
+        for text, field in (
+            ("В Азовском, стол до 5000", FIELD_CITY),
+            ("До 1500 кресел в Азове", FIELD_BUDGET),
+            ("Нужен диван в Азове до 5000", FIELD_CATEGORIES),
+        ):
+            with self.subTest(text=text):
+                slots = extract_message(text, resolver=self.resolver)
+                self.assertEqual(self.calls, [])
+                self.assertEqual(missing_fields(slots), (field,))
 
     def test_no_model_call_for_quantity_without_money(self) -> None:
         """«2 кресла» — количество, а не бюджет: признака денег в тексте нет."""

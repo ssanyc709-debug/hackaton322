@@ -27,6 +27,7 @@ from app.llm.client import (
     build_payload,
     complete,
     make_resolver,
+    redact,
 )
 from app.model import Slots
 from app.prompt_safety import EXTRACTION_SCHEMA_NAME
@@ -34,6 +35,16 @@ from tests.support import REPO_ROOT
 
 MODEL = "google/gemma-4-31B-it"
 API_KEY = "test-key-0123456789"
+
+
+class RedactTest(unittest.TestCase):
+    """Ключ скрывается в диагностике и без обращения к шлюзу."""
+
+    def test_redact_replaces_every_occurrence(self) -> None:
+        self.assertEqual(
+            redact(f"Bearer {API_KEY}; token={API_KEY}", API_KEY),
+            "Bearer [REDACTED]; token=[REDACTED]",
+        )
 
 
 def envelope(

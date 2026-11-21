@@ -30,7 +30,8 @@ def read_catalog_document(path: Path) -> list[dict[str, object]]:
     Почему именно он: типы всех семи полей проверяет
     ``app.catalog.index.parse_listing`` — здесь достаточно быстро отсечь
     «файл не тот», не дублируя валидацию объявления.
-    Крайние случаи: пустой файл, объект вместо массива, > 250 записей.
+    Крайние случаи: пустой массив допустим; пустой файл, объект вместо массива
+    и более 250 записей вызывают ошибку каталога.
     Вызывается из: app/main.py::main.
     """
     try:
@@ -40,8 +41,6 @@ def read_catalog_document(path: Path) -> list[dict[str, object]]:
 
     if not isinstance(document, list):
         raise CatalogError(f"каталог {path}: ожидался JSON-массив объявлений")
-    if not document:
-        raise CatalogError(f"каталог {path}: массив объявлений пуст")
     if len(document) > MAX_CATALOG_LISTINGS:
         raise CatalogError(f"каталог {path}: {len(document)} объявлений при лимите {MAX_CATALOG_LISTINGS}")
     return document

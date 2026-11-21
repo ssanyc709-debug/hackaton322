@@ -105,6 +105,25 @@ def asked_fields(document: Mapping[str, Any]) -> set[str]:
     return {str(question["field"]) for question in document.get("questions", [])}
 
 
+class AmbiguousQueryTest(unittest.TestCase):
+    """Вопросы боевого пути соответствуют явно названным основным условиям."""
+
+    def test_only_missing_primary_fields_are_asked(self) -> None:
+        for text, fields in (
+            ("В Азовском, стол до 5000", {"city_id"}),
+            ("Стол в Таганроге, но лучше в Туле, до 5000", {"city_id"}),
+            ("Лампа от 3000 до 5000, Таганрог", {"budget_rub"}),
+            ("Стол 142 в Азове", {"budget_rub"}),
+            ("До 1500 кресел в Азове", {"budget_rub"}),
+            ("Стол и белая полоса сверху", {"city_id", "budget_rub"}),
+        ):
+            with self.subTest(text=text):
+                document = document_for(text)
+                self.assertEqual(document["status"], "clarify")
+                self.assertEqual(asked_fields(document), fields)
+                self.assertEqual(len(document["questions"]), len(fields))
+
+
 def plain(text: str) -> str:
     """Текст без неразрывных пробелов: суммы в сообщениях пишутся через ``\\xa0``."""
     return text.replace("\u00a0", " ")

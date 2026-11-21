@@ -20,13 +20,13 @@ from dataclasses import replace
 from typing import Callable, Sequence
 
 from app.model import (
+    CATEGORIES,
     FIELD_ADJUSTABLE,
     FIELD_BUDGET,
     FIELD_CATEGORIES,
     FIELD_CITY,
     FIELD_TEMPERATURE,
     FIELD_WIDTH,
-    NumericRange,
     Slots,
 )
 from app.nlp.cache import LexiconCache
@@ -39,8 +39,6 @@ from app.nlp.lexicon import (
 from app.nlp.numbers import (
     LOWER_INC,
     LOWER_STRICT,
-    # граница правдоподобной ширины стола, см (защита от «100 метров»)
-    MAX_WIDTH_CM,
     MONEY_HINTS,
     UNIT_RUB,
     UNIT_WORDS,
@@ -48,7 +46,6 @@ from app.nlp.numbers import (
     collect_constraints,
     find_amounts,
     normalize_text,
-    to_bounds,
     tokenize,
 )
 
@@ -59,6 +56,9 @@ NON_CAPPING_KINDS = frozenset({LOWER_INC, LOWER_STRICT})
 #: Нижняя/верхняя границы правдоподобной цветовой температуры, K.
 MIN_KELVIN = 1500
 MAX_KELVIN = 9000
+
+#: Явные счётные и размерные обозначения, которые не могут обозначать рубли.
+NON_MONEY_UNITS = frozenset({"шт", "штука", "штуки", "штук", "мм", "mm"})
 
 #: Максимальная длина реплики, которую имеет смысл отдавать в модель.
 MAX_MODEL_TEXT_BYTES = 4_000
@@ -131,10 +131,6 @@ REMOVAL_WINDOW_AFTER = 7
 #: «посветить над столом», «поставить под лампу», «лампа на стол».
 PLACE_PREPOSITIONS: frozenset[str] = frozenset({"над", "под", "на"})
 
-#: Предлоги, с которых может начинаться название города: «в Таганроге», «из Азова».
-#: Используются только как признак «в тексте был город» для решения о вызове модели.
-CITY_PREPOSITIONS: frozenset[str] = frozenset({"в", "во", "из", "около", "рядом", "возле"})
-
 #: Тип resolver-а: реплика + уже известные слоты → частичный результат модели.
 Resolver = Callable[[str, Slots], "dict[str, object] | None"]
 
@@ -198,18 +194,19 @@ def _lexicon_slots(normalized: str) -> Slots:
 
     city_hits = lexicon.scan_cities(tokens)
     foreign_city_hits = lexicon.scan_unsupported_cities(tokens)
+    city_positions = {hit.position for hit in (*city_hits, *foreign_city_hits)}
     category_hits = tuple(
-        hit for hit in lexicon.scan_categories(tokens) if not _is_place_use(tokens, hit.position)
+        hit
+        for hit in lexicon.scan_categories(tokens)
+        if hit.position not in city_positions and not _is_place_use(tokens, hit.position)
     )
     unsupported_hits = lexicon.scan_unsupported_categories(tokens)
 
-    # Явное изменение города внутри реплики: последнее упоминание побеждает.
-    # Несколько городов («Таганрог или Азов») — решение команды (docs/QA-ERRORS.md,
-    # «Вне области задачи»): §3 требует ОДИН город, поэтому берётся последний,
-    # а варианты в обоих городах не собираются.
+    # Берём последнее упоминание города, включая явный переход к городу вне справочника.
     city_id = city_hits[-1].value if city_hits else None
     city_unknown = None
-    if city_id is None and foreign_city_hits:
+    if foreign_city_hits and (not city_hits or foreign_city_hits[-1].position >= city_hits[-1].position):
+        city_id = None
         city_unknown = foreign_city_hits[-1].value
 
     categories = order_categories(hit.value for hit in category_hits)
@@ -223,32 +220,36 @@ def _lexicon_slots(normalized: str) -> Slots:
     # Фраза-описание добавляет категорию к уже названным, а не заменяет набор.
     categories_additive = bool(ADDITIVE_PATTERN.search(normalized)) or bool(phrase_categories)
 
-    constraints = collect_constraints(find_amounts(normalized))
+    noun_positions = {
+        hit.position
+        for hit in (*category_hits, *unsupported_hits)
+        if hit.how != "fuzzy" and hit.word not in lexicon.category_adjectives
+    }
+    amounts = (
+        amount
+        for amount in find_amounts(normalized)
+        if amount.unit is not None
+        or amount.following_position is None
+        or (
+            amount.following_position not in noun_positions
+            and tokens[amount.following_position] not in NON_MONEY_UNITS
+        )
+    )
+    constraints = collect_constraints(amounts)
     width = constraints.width
     temperature = constraints.temperature
     budget = constraints.budget_rub
 
-    if width is not None and not _plausible_width(width):
-        width = None  # явно не ширина стола (например, «100 метров»)
-
-    # Числа без единицы: контекст категорий решает, деньги это или кельвины.
-    # Приоритет у денег: бюджет — обязательное условие, а температура без «К»
-    # почти всегда означает пару «от…до» вокруг лампы.
-    for group in constraints.neutral_groups:
-        values = [amount.value for amount in group]
-        if (
-            len(group) >= 2
-            and "lamp" in categories
-            and temperature is None
-            and all(MIN_KELVIN <= value <= MAX_KELVIN for value in values)
-        ):
-            temperature = to_bounds(group)
-        elif max(values) >= MIN_BUDGET_GUESS and budget is None:
-            # Нижняя граница («бюджет от 5000», «дороже 5000») потолком не является:
-            # бюджет по §3 — верхний предел, иначе покупателю предложат ровно то,
-            # что он просил не предлагать.
-            if any(amount.kind not in NON_CAPPING_KINDS for amount in group):
-                budget = max(values)
+    if budget is None:
+        for group in constraints.neutral_groups:
+            if "lamp" in categories and temperature is None and len(group) > 1 and all(
+                MIN_KELVIN <= amount.value <= MAX_KELVIN for amount in group
+            ):
+                continue
+            caps = [amount.value for amount in group if amount.kind not in NON_CAPPING_KINDS]
+            if caps and max(caps) >= MIN_BUDGET_GUESS:
+                budget = max(caps)
+                break
 
     adjustable = _detect_adjustable(normalized)
 
@@ -401,16 +402,6 @@ def _detect_field_removals(normalized: str) -> tuple[str, ...]:
     return tuple(removed)
 
 
-def _plausible_width(width: NumericRange) -> bool:
-    """Правдоподобна ли ширина стола: 1..400 см."""
-    for bound in (width.lower, width.upper):
-        if bound is None:
-            continue
-        if bound.value <= 0 or bound.value > MAX_WIDTH_CM:
-            return False
-    return True
-
-
 def _detect_adjustable(normalized: str) -> bool | None:
     """Определяет требование к регулировке высоты кресла.
 
@@ -425,10 +416,10 @@ def _detect_adjustable(normalized: str) -> bool | None:
 
 
 def _apply_resolver(slots: Slots, text: str, resolver: Resolver) -> Slots:
-    """Дополняет слоты результатом одного вызова модели, не перетирая локальное.
+    """Дополняет категории результатом одного вызова модели.
 
     Перед вызовом проверяется :func:`model_can_help`: если модель всё равно не
-    может закрыть недостающее условие (нет бюджета или не к чему привязать город),
+    может закрыть недостающую категорию (например, бюджет ещё неизвестен),
     вызова нет. Исключения клиента модели (:class:`app.llm.client.LlmError`)
     намеренно НЕ глушатся: сбой внешнего сервиса — это техническая ошибка запуска
     (stderr + ненулевой код, CONTRACT.md §1), а не повод выдать ``no_match``
@@ -437,7 +428,7 @@ def _apply_resolver(slots: Slots, text: str, resolver: Resolver) -> Slots:
     """
     if len(text.encode("utf-8")) > MAX_MODEL_TEXT_BYTES:
         return slots
-    if not model_can_help(slots, [text]):
+    if not model_can_help(slots):
         return slots
     raw = resolver(text, slots)
     if not raw:
@@ -446,121 +437,37 @@ def _apply_resolver(slots: Slots, text: str, resolver: Resolver) -> Slots:
 
 
 def merge_model_slots(slots: Slots, raw: dict[str, object]) -> Slots:
-    """Дополняет слоты полями модели; локально найденные значения не меняются.
-
-    Модель — вспомогательный источник: если она «увидела» город, которого нет
-    в справочнике, значение всё равно проверяется по ``CITY_WORDS``. Это часть
-    защиты от манипуляций: текст объявления и ответ модели не могут переписать
-    правила, только дополнить недостающие условия.
-    """
-    city_id = slots.city_id
-    mentioned = set(slots.mentioned)
-    model_city = raw.get("city_id")
-    if city_id is None and isinstance(model_city, str):
-        from app.nlp.lexicon import CITY_WORDS
-
-        if model_city in CITY_WORDS:
-            city_id = model_city
-            mentioned.add(FIELD_CITY)
-
-    budget = slots.budget_rub
-    model_budget = raw.get("budget_rub")
-    if budget is None and isinstance(model_budget, int) and not isinstance(model_budget, bool) and model_budget > 0:
-        budget = model_budget
-        mentioned.add(FIELD_BUDGET)
-
-    categories = slots.categories
-    categories_explicit = slots.categories_explicit
+    """За O(числа вариантов модели) дополняет пропущенную категорию из таксономии."""
     model_categories = raw.get("categories")
-    if not categories and isinstance(model_categories, list):
-        valid = [item for item in model_categories if isinstance(item, str) and item in ("table", "chair", "lamp")]
+    if model_can_help(slots) and isinstance(model_categories, list):
+        valid = [item for item in model_categories if isinstance(item, str) and item in CATEGORIES]
         if valid:
-            categories = order_categories(valid)
-            categories_explicit = True
-            mentioned.add(FIELD_CATEGORIES)
+            return replace(
+                slots,
+                categories=order_categories(valid),
+                categories_explicit=True,
+                mentioned=slots.mentioned | {FIELD_CATEGORIES},
+                source="model",
+            )
+    return slots
 
-    return replace(
-        slots,
-        city_id=city_id,
-        budget_rub=budget,
-        categories=categories,
-        categories_explicit=categories_explicit,
-        mentioned=frozenset(mentioned),
-        source="model",
+
+def model_can_help(slots: Slots) -> bool:
+    """CORE. Разрешает вызов модели для описательного запроса о товаре.
+
+    Вход: локально разобранные условия одной реплики или всего диалога.
+    Выход: True, когда город и бюджет известны, категория отсутствует и
+    покупатель не назвал неподдерживаемый предмет. Проверка занимает O(1).
+    Так «деревяшка с четырьмя ножками» с указанными городом и бюджетом
+    попадает в модель, а «диван», «в Азовском» и «до 900» ведут к уточнению.
+    Явно заданный нулевой бюджет считается известным.
+    """
+    return (
+        slots.city_id is not None
+        and slots.budget_rub is not None
+        and not slots.categories
+        and not slots.categories_unknown
     )
-
-
-def model_can_help(slots: Slots, texts: Sequence[str]) -> bool:
-    """CORE. Стоит ли звать модель: может ли она закрыть недостающее условие.
-
-    Зачем: каждый вызов — ≈251 токен и 2–6 с ожидания. Если обязательное условие
-    невозможно вывести из текста, ответ всё равно останется ``clarify``, и вызов
-    не меняет ничего, кроме счёта за токены. Гейт отсекает ровно такие случаи.
-
-    Вход:  slots — условия после слияния всей истории;
-           texts — реплики покупателя (нужны как признаки в тексте).
-
-    Выход: True, если модель может закрыть хотя бы одно недостающее условие.
-
-    Алгоритм (по убыванию ценности):
-      1. все обязательные условия известны → False;
-      2. бюджет неизвестен и в тексте нет признака денег (сумма с «₽» или
-         значение ≥ 1000) → False: брать сумму неоткуда, а «2 кресла» —
-         количество, не бюджет;
-      3. город неизвестен, но назван город вне справочника → False: подставлять
-         другой город нельзя, а справочник закрыт;
-      4. город неизвестен и в тексте нет предлога места («в», «из», «около»…) →
-         False: привязывать фразу к городу не к чему;
-      5. иначе True.
-    Сложность: время O(Σ|text|) на проверку чисел и предлогов, память O(|tokens|).
-    Почему именно он: решение принимается по состоянию слотов и по признакам
-    в тексте, а не по «модель всегда умнее». Это единственный способ гарантировать,
-    что в ответе нет значений, которых покупатель не называл: город и бюджет
-    модель не может выдумать, а разобрать фразу про предмет («деревяшка с
-    четырьмя ножками») — может.
-    Крайние случаи: пустая история → False; известны город и бюджет, не распознаны
-    категории → True (это и есть «деревяшка с четырьмя ножками»); «Хочу мебель» →
-    False (ни города, ни бюджета, и модель их не выдумает); «Нужен стлл» без
-    города и бюджета → False (ответ всё равно ``clarify``); «2 кресла в Азове» →
-    False (число — количество, а не бюджет).
-    Вызывается из: app/nlp/extract.py::_apply_resolver,
-    app/nlp/merge.py::resolve_missing, тесты.
-    """
-    if is_complete(slots):
-        return False
-    if slots.budget_rub is None and not _has_money_evidence(texts):
-        return False
-    if slots.city_id is None:
-        if slots.city_unknown is not None:
-            return False
-        return _city_hint(texts)
-    return True
-
-
-def _has_money_evidence(texts: Sequence[str]) -> bool:
-    """Есть ли в репликах признак денег: валюта рядом с числом или сумма ≥ 1000.
-
-    Мелкое число без валюты — это количество («2 кресла»), а не бюджет;
-    такая «сумма» не даёт модели ничего, что стоило бы вызова.
-    """
-    for text in texts:
-        for amount in find_amounts(normalize_text(text)):
-            if amount.unit == UNIT_RUB or amount.value >= MIN_BUDGET_GUESS:
-                return True
-    return False
-
-
-def _city_hint(texts: Sequence[str]) -> bool:
-    """Есть ли в репликах предлог, с которого начинается название города.
-
-    Слово из справочника сюда не доходит: тогда ``city_id`` уже был бы задан.
-    Остаётся единственный случай, когда модель может связать фразу с городом, —
-    предлог места («в пригороде», «из области»).
-    """
-    for text in texts:
-        if any(token in CITY_PREPOSITIONS for token in tokenize(normalize_text(text))):
-            return True
-    return False
 
 
 #: Короткие осмысленные ответы покупателя: подтверждение, благодарность,
@@ -753,7 +660,7 @@ def is_complete(slots: Slots) -> bool:
 
     Используется для решения «звать ли модель»: если True — вызова нет.
     """
-    return bool(slots.city_id and slots.budget_rub and slots.categories)
+    return not missing_fields(slots)
 
 
 def missing_fields(slots: Slots) -> tuple[str, ...]:
