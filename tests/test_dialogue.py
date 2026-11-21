@@ -278,6 +278,18 @@ class UnintelligibleMessageTest(unittest.TestCase):
             ["budget_rub", "city_id", "categories"],
         )
 
+    def test_keyboard_row_mash_after_complete_conditions_asks_categories(self) -> None:
+        """Набор букв с одного ряда клавиатуры — мусор, а не «продолжай».
+
+        «аваыла» и «фывафыва» проходят проверки «мало разных букв» и «4+
+        согласных подряд»: буквы чередуются как в слове. Их выдаёт другое —
+        все буквы лежат в одном ряду клавиатуры, то есть это прогон пальцами.
+        """
+        for text in ("аваыла", "фывафыва", "фывапролд", "цукен"):
+            with self.subTest(text=text):
+                document = run(["Стол до 5000. Таганрог.", text])
+                self.assertEqual(self.fields(document), ["categories"])
+
 
 class UnintelligibleRegressionTest(unittest.TestCase):
     """Короткие осмысленные ответы обязаны остаться рабочими (§3).
@@ -302,6 +314,18 @@ class UnintelligibleRegressionTest(unittest.TestCase):
     def test_short_confirmation_keeps_the_selection(self) -> None:
         document = run(["Стол до 5000. Таганрог.", "ок"])
         self.assertEqual(document.get("status"), "ok", document)
+
+    def test_live_reactions_are_not_gibberish(self) -> None:
+        """Живые реакции на подбор — не мусор, даже если форма слова странная.
+
+        «лады» целиком лежит в одном ряду клавиатуры, поэтому без белого списка
+        подтверждений новый признак счёл бы его мусором и переспросил категории
+        вместо показа уже подобранного комплекта.
+        """
+        for text in ("отлично", "лады", "дорого", "добавь"):
+            with self.subTest(text=text):
+                document = run(["Стол до 5000. Таганрог.", text])
+                self.assertEqual(document.get("status"), "ok", document)
 
     def test_unsupported_category_in_one_message_still_asks_categories(self) -> None:
         document = run(["Диван в Таганроге до 30000"])
