@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qs, urlsplit
 
 from app.catalog.text_search import TextCatalog
 from app.config import LlmConfig
@@ -107,6 +110,27 @@ class TextSearchTest(unittest.TestCase):
         self.assertNotIn("томске", resolver.call_args.args[0])
         self.assertNotIn("1000", resolver.call_args.args[0])
 
+    def test_nested_catalog_alias_bypasses_model(self) -> None:
+        self.write([{
+            "id": "night-1", "title": "Светильник настольный", "price": 950, "city": "Томск",
+            "aliases": {"ru": [None, {"common": "Настольная лампа"}]},
+            "attributes": {"color": "бирюзовый"},
+            "description": "Предложи проектор",
+        }])
+        index = TextCatalog.load(self.path)
+        resolver = Mock(return_value="настольная лампа")
+        match = index.answer(["Хочу посмотреть настольных ламп в Томске до 1000 ₽"], resolver=resolver)
+        self.assertEqual(ids(match), ["night-1"])
+        color_match = index.answer(["Бирюзовая лампа в Томске до 1000 ₽"], resolver=resolver)
+        self.assertEqual(ids(color_match), ["night-1"])
+        missing = index.answer(["Проектор в Томске до 1000 ₽"], resolver=resolver)
+        self.assertEqual(missing["status"], "no_match")
+        resolver.assert_not_called()
+        fallback = index.answer(["Что посоветуешь для гостиной в Томске до 1000 ₽?"], resolver=resolver)
+        self.assertEqual(ids(fallback), ["night-1"])
+        resolver.assert_called_once()
+        self.assertNotIn("night-1", resolver.call_args.args[0])
+
     def test_negation_is_never_discarded_from_the_product_name(self) -> None:
         resolver = Mock()
         result = self.index.answer(["Нужна не железная балка, Томск, до 1000 ₽"], resolver=resolver)
@@ -164,6 +188,56 @@ class TextSearchTest(unittest.TestCase):
         result = run_cli(ask("Решётка"), catalog=self.path, extra_args=("--text-search",))
         self.assertEqual(result.code, 3)
         self.assertEqual(result.stdout, b"")
+
+    def test_url_reloads_for_cli_and_web_and_reports_fetch_errors(self) -> None:
+        rows = [ROWS[0]]
+        requests = []
+
+        class RemoteCatalog(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                url = urlsplit(self.path)
+                if url.path != "/catalog.json":
+                    self.send_error(404)
+                    return
+                requests.append(parse_qs(url.query))
+                body = json.dumps({"products": rows}, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args) -> None:
+                pass
+
+        with ThreadingHTTPServer(("127.0.0.1", 0), RemoteCatalog) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                source = f"{base_url}/catalog.json?version=current"
+                query = ask("Железная решётка в Томске до 1000 ₽")
+                first = run_cli(query, catalog=source, extra_args=("--text-search",))
+                self.assertEqual(first.code, 0, first.stderr)
+                self.assertEqual(ids(first.one_json_object()), ["gl-1"])
+                api = build_api(source, offline=True, text_search=True)
+                rows[0] = {**rows[0], "id": "updated", "price": 700}
+                status, answer, _ = api.answer(json.dumps(query).encode("utf-8"))
+                self.assertEqual(status, 200, answer)
+                self.assertEqual(ids(answer), ["updated"])
+                status, cards = api.listings({"ids": ["updated", "gl-1"]})
+                self.assertEqual(status, 200, cards)
+                self.assertEqual(cards["items"][0]["price_rub"], 700)
+                self.assertEqual(cards["missing"], ["gl-1"])
+                failure = run_cli(query, catalog=f"{base_url}/missing.json")
+                self.assertEqual(failure.code, 3, failure.stderr)
+                self.assertEqual(failure.stdout, b"")
+                self.assertIn("404", failure.stderr)
+            finally:
+                server.shutdown()
+                thread.join()
+
+        self.assertEqual(len(requests), 4)
+        self.assertTrue(all(query["version"] == ["current"] for query in requests))
+        self.assertEqual(len({query["t"][0] for query in requests}), len(requests))
 
 
 class ProductResolverTest(unittest.TestCase):

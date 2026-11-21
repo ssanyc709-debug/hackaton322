@@ -6,12 +6,12 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Iterator, Sequence
 
+from app.catalog import load_json_data
 from app.catalog.explain import money
 from app.config import MAX_OPTIONS
 from app.contract import response
-from app.jsonio import JsonError, load_json_file
 from app.model import CatalogError
 from app.nlp.lexicon import CITY_WORDS, UNSUPPORTED_CITY_WORDS, stem
 from app.nlp.numbers import (
@@ -36,13 +36,14 @@ _BUDGET_WORDS = MONEY_HINTS | {
 _QUERY_FILLER = (FILLER_WORDS - {"не"}) | {
     "дай", "дайте", "покажи", "покажите", "предложи", "предложите", "куплю", "купить",
     "товар", "товары", "варианты", "вариант", "варианта", "вариантов", "подбор",
-    "покажешь", "показывай", "поищи", "ищем", "интересует", "лучше", "давай",
+    "покажешь", "показывай", "посмотреть", "поищи", "ищем", "интересует", "лучше", "давай",
     "самовывоз", "город", "теперь", "поменяем", "ок", "спасибо", "подходит",
     "хорошо", "ага", "угу", "да", "ладно", "еще", "привет", "здравствуйте",
     "благодарю", "понятно", "понял", "ясно", "все", "доступные", "г",
 }
 _DESCRIPTIVE = re.compile(
-    r"\b(?:что[- ](?:нибудь|то)|чем\s+можно|на\s+чем|для\s+того\s+чтобы)\b"
+    r"\b(?:что[- ](?:нибудь|то)|что\s+(?:посоветуешь|посоветуете)|"
+    r"чем\s+можно|на\s+чем|для\s+того\s+чтобы)\b"
 )
 _FLEETING_VOWEL = re.compile(r"([бвгджзклмнпрстфхцчшщ])[ое]к$")
 
@@ -63,6 +64,18 @@ def _forms(word: str) -> frozenset[str]:
     return frozenset(forms)
 
 
+def extract_all_strings(data: object) -> Iterator[str]:
+    """Обходит вложенные текстовые значения поисковых полей."""
+    if isinstance(data, dict):
+        for value in data.values():
+            yield from extract_all_strings(value)
+    elif isinstance(data, list):
+        for value in data:
+            yield from extract_all_strings(value)
+    elif isinstance(data, str) and data.strip():
+        yield data.strip()
+
+
 @dataclass(frozen=True, slots=True)
 class Product:
     """Факты о товаре, необходимые для поиска и выдачи."""
@@ -72,6 +85,7 @@ class Product:
     price_rub: int
     city_id: str
     city_name: str
+    search_texts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,11 +113,13 @@ def _parse_product(raw: object, position: int) -> Product:
         raise CatalogError(f"товар #{position}: нужны непустые id, title/name и city_id/city")
     if type(price) is not int or price < 1:
         raise CatalogError(f"товар #{position}: price_rub/price должен быть целым числом > 0")
-    return Product(listing_id, title.strip(), price, city_id.strip(), city_name.strip())
+    search_fields = [raw.get(key) for key in ("aliases", "keywords", "attributes")]
+    search_texts = tuple(extract_all_strings(search_fields))
+    return Product(listing_id, title.strip(), price, city_id.strip(), city_name.strip(), search_texts)
 
 
 class TextCatalog:
-    """Индекс слов заголовков и городов текущего JSON."""
+    """Индекс заголовков, поисковых псевдонимов и городов текущего JSON."""
 
     def __init__(self, products: Sequence[Product]) -> None:
         self.products = {product.id: product for product in products}
@@ -119,15 +135,13 @@ class TextCatalog:
             aliases[(form, "на", "дону")].add("rostov-na-donu")
         catalog_aliases: dict[tuple[str, ...], set[str]] = defaultdict(set)
         for product in products:
-            in_head = True
-            for position, word in enumerate(_terms(product.title)):
-                if position and word in _PURPOSE_WORDS:
-                    in_head = False
-                for form in _forms(word):
-                    if in_head:
-                        self.head_postings[form].add(product.id)
-                    else:
-                        self.purpose_postings[form].add(product.id)
+            for phrase in (product.title, *product.search_texts):
+                postings = self.head_postings
+                for position, word in enumerate(_terms(phrase)):
+                    if position and word in _PURPOSE_WORDS:
+                        postings = self.purpose_postings
+                    for form in _forms(word):
+                        postings[form].add(product.id)
             catalog_aliases[_terms(product.city_id)].add(product.city_id)
             catalog_aliases[_terms(product.city_name)].add(product.city_id)
         catalog_stems: dict[tuple[str, ...], set[str]] = defaultdict(set)
@@ -146,12 +160,9 @@ class TextCatalog:
         self.city_lengths = sorted({len(alias) for alias in aliases if alias}, reverse=True)
 
     @classmethod
-    def load(cls, path: Path) -> TextCatalog:
-        """Читает один файл целиком, проверяет JSON и строит индекс названий."""
-        try:
-            raw = load_json_file(path, source=f"каталог {path}")
-        except JsonError as exc:
-            raise CatalogError(str(exc)) from exc
+    def load(cls, source: Path | str) -> TextCatalog:
+        """Читает текущий документ из заданного источника и строит индекс."""
+        raw = load_json_data(source)
         if isinstance(raw, dict):
             raw = raw.get("listings", raw.get("products"))
         if not isinstance(raw, list):

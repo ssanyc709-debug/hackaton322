@@ -2,7 +2,7 @@
 
 Тонкая обёртка: логику подбора НЕ повторяет. Каждый запрос диалога уходит в
 настоящий бэкенд отдельным процессом (`python -m app.main --catalog ...`,
-stdin → stdout), а статика и карточки товаров отдаются из файлов репозитория.
+stdin → stdout), а карточки товаров читаются из заданного каталога.
 
 Запуск (из корня репозитория или откуда угодно):
 
@@ -30,6 +30,11 @@ from urllib.parse import parse_qs, urlsplit
 WEB_DIR = Path(__file__).resolve().parent
 ROOT = WEB_DIR.parent
 DEFAULT_CATALOG = ROOT / "data" / "catalog.json"
+
+if not __package__:
+    sys.path.insert(0, str(ROOT))  # запуск напрямую через python web/serve.py
+
+from app.catalog import CatalogError, load_json_data, parse_catalog_source
 
 #: Белый список статики: имя файла → Content-Type. Путь из URL никогда не
 #: превращается в путь файловой системы, поэтому `..` и NUL-байты бесполезны.
@@ -110,32 +115,35 @@ def server_headers(info: dict[str, Any]) -> dict[str, str]:
 
 
 class Catalog:
-    """Чтение data/catalog.json с кэшем по времени изменения файла.
+    """Чтение карточек из файла или URL каталога.
 
     Отдаёт наружу ТОЛЬКО безопасные для показа поля. ``description`` сюда не
     входит сознательно: по условиям кейса описания не участвуют в подборе и в
     браузер не отдаются вовсе (даже если они есть в файле).
     """
 
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    def __init__(self, source: Path | str) -> None:
+        self.source = source
+        self._lock = threading.Lock()
         self._stamp: tuple[int, int] | None = None
         self._by_id: dict[str, dict[str, Any]] = {}
         self._cities: dict[str, str] = {}
         self._categories: dict[str, str] = {}
 
     def _reload_if_changed(self) -> None:
-        try:
-            stat = self.path.stat()
-        except OSError as exc:
-            raise RuntimeError(f"каталог недоступен: {self.path} ({exc})") from exc
-        stamp = (stat.st_mtime_ns, stat.st_size)
-        if stamp == self._stamp:
-            return
+        stamp = None
+        if isinstance(self.source, Path):
+            try:
+                stat = self.source.stat()
+            except OSError as exc:
+                raise RuntimeError(f"каталог недоступен: {self.source} ({exc})") from exc
+            stamp = (stat.st_mtime_ns, stat.st_size)
+            if stamp == self._stamp:
+                return
 
         try:
-            document = json.loads(self.path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError) as exc:
+            document = load_json_data(self.source)
+        except CatalogError as exc:
             raise RuntimeError(f"каталог не читается: {exc}") from exc
         if not isinstance(document, list):
             if isinstance(document, dict):
@@ -193,17 +201,19 @@ class Catalog:
 
     def find(self, ids: Sequence[str]) -> tuple[list[dict[str, Any]], list[str]]:
         """Карточки по списку id; порядок сохраняется, неизвестные попадают в ``missing``."""
-        self._reload_if_changed()
+        with self._lock:
+            self._reload_if_changed()
+            by_id, cities, categories = self._by_id, self._cities, self._categories
         items: list[dict[str, Any]] = []
         missing: list[str] = []
         for listing_id in ids:
-            card = self._by_id.get(listing_id)
+            card = by_id.get(listing_id)
             if card is None:
                 missing.append(listing_id)
                 continue
             enriched = dict(card)
-            enriched["category_name"] = self._categories.get(card["category"], card["category"])
-            enriched["city_name"] = self._cities.get(card["city_id"], card["city_name"] or card["city_id"])
+            enriched["category_name"] = categories.get(card["category"], card["category"])
+            enriched["city_name"] = cities.get(card["city_id"], card["city_name"] or card["city_id"])
             items.append(enriched)
         return items, missing
 
@@ -267,7 +277,7 @@ def backend_metrics(stderr: bytes) -> dict[str, Any]:
 
 
 def call_backend(
-    payload: dict[str, Any], catalog_path: Path, env: dict[str, str], *, text_search: bool = False,
+    payload: dict[str, Any], catalog_path: Path | str, env: dict[str, str], *, text_search: bool = False,
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
     """CORE. Один запрос диалога → ответ бэкенда как есть.
 
@@ -389,7 +399,7 @@ def validate_request_body(raw: bytes) -> tuple[dict[str, Any] | None, dict[str, 
 class Api:
     """Состояние сервера: каталог, путь к нему и режим офлайна."""
 
-    def __init__(self, catalog: Catalog, catalog_path: Path, offline: bool, *, text_search: bool = False) -> None:
+    def __init__(self, catalog: Catalog, catalog_path: Path | str, offline: bool, *, text_search: bool = False) -> None:
         self.catalog = catalog
         self.catalog_path = catalog_path
         self.offline = offline
@@ -640,7 +650,7 @@ def make_server(api: Api, host: str = "127.0.0.1", port: int = 8000) -> WebServe
     return WebServer((host, port), make_handler(api), api)
 
 
-def build_api(catalog_path: Path, offline: bool, *, text_search: bool = False) -> Api:
+def build_api(catalog_path: Path | str, offline: bool, *, text_search: bool = False) -> Api:
     """Собирает состояние сервера.
 
     Недоступный или битый каталог НЕ мешает старту: сервер страны обязан
@@ -663,7 +673,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="web/serve.py", description="Демо-сайт «ИИ-помощник покупателя».")
     parser.add_argument("--host", default="127.0.0.1", help="адрес прослушивания (по умолчанию только loopback)")
     parser.add_argument("--port", type=int, default=8000, help="порт; 0 — любой свободный")
-    parser.add_argument("--catalog", default=str(DEFAULT_CATALOG), help="путь к catalog.json (по умолчанию data/catalog.json)")
+    parser.add_argument("--catalog", default=str(DEFAULT_CATALOG), help="путь или HTTP(S)-URL каталога (по умолчанию data/catalog.json)")
     parser.add_argument("--offline", action="store_true", help="выставить ASSISTANT_OFFLINE=1 процессу бэкенда")
     parser.add_argument("--text-search", action="store_true", help="искать по названиям товаров без таксономии")
     return parser
@@ -680,7 +690,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pass
 
     args = build_arg_parser().parse_args(argv)
-    catalog_path = Path(args.catalog).expanduser().resolve()
+    catalog_path = parse_catalog_source(args.catalog)
+    if isinstance(catalog_path, Path):
+        catalog_path = catalog_path.resolve()
 
     api = build_api(catalog_path, args.offline, text_search=args.text_search)
 
@@ -691,7 +703,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
 
     host, port = server.server_address[:2]
-    log(f"каталог: {catalog_path} ({len(api.catalog._by_id)} объявлений)")
+    catalog_label = str(catalog_path) if isinstance(catalog_path, Path) else "по URL"
+    log(f"каталог: {catalog_label} ({len(api.catalog._by_id)} объявлений)")
     log(f"режим: {'офлайн (модель не вызывается)' if api.offline else 'обычный (модель по необходимости)'}")
     log(f"сайт: http://{host}:{port}/ — Ctrl+C для остановки")
     try:

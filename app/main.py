@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Sequence
 
 from app import config
-from app.catalog import CatalogError, read_catalog_document
+from app.catalog import CatalogError, parse_catalog_source, read_catalog_document
 from app.catalog.index import CatalogIndex, get_index
 from app.catalog.text_search import TextCatalog
 from app.contract import response
@@ -50,7 +50,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         prog="run",
         description="ИИ-помощник покупателя: один JSON-запрос из stdin, один JSON-ответ в stdout.",
     )
-    parser.add_argument("--catalog", required=True, help="путь к catalog.json текущего запуска")
+    parser.add_argument("--catalog", required=True, help="путь или HTTP(S)-URL файла catalog.json")
     parser.add_argument("--text-search", action="store_true", help="искать по названиям товаров без таксономии")
     parser.add_argument("--env-file", default=None, help="альтернативный .env (по умолчанию <repo>/.env)")
     parser.add_argument("--debug", action="store_true", help="подробная трассировка этапов в stderr")
@@ -86,9 +86,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     _force_utf8_streams()
 
-    catalog_path = Path(args.catalog).expanduser()
-    if not catalog_path.is_file():
-        log(f"каталог не найден: {catalog_path}")
+    catalog_source = parse_catalog_source(args.catalog)
+    if isinstance(catalog_source, Path) and not catalog_source.is_file():
+        log(f"каталог не найден: {catalog_source}")
         return EXIT_CATALOG
 
     try:
@@ -103,9 +103,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     stage = time.monotonic()
     try:
         if args.text_search:
-            index = TextCatalog.load(catalog_path)
+            index = TextCatalog.load(catalog_source)
         else:
-            catalog = read_catalog_document(catalog_path)
+            catalog = read_catalog_document(catalog_source)
             index = get_index(catalog, cache_dir=settings.cache_dir)
     except CatalogError as exc:
         log(f"каталог: {exc}")
