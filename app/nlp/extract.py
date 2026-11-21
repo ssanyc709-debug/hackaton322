@@ -41,7 +41,9 @@ from app.nlp.numbers import (
     LOWER_STRICT,
     # граница правдоподобной ширины стола, см (защита от «100 метров»)
     MAX_WIDTH_CM,
+    MONEY_HINTS,
     UNIT_RUB,
+    UNIT_WORDS,
     FILLER_WORDS,
     collect_constraints,
     find_amounts,
@@ -64,11 +66,15 @@ MAX_MODEL_TEXT_BYTES = 4_000
 #: Регулярные выражения для булевой характеристики кресла.
 ADJUSTABLE_TRUE_RE = re.compile(
     r"(с|есть|нужн\w*|хочу)\s+(регулировк|подъем|подъём)|регулируем\w*|"
-    r"регулировк\w*\s+высот|изменяем\w*\s+высот|с\s+подъемн"
+    r"регулировк\w*\s+высот|изменяем\w*\s+высот|с\s+подъемн|"
+    # глагольные формы: «чтобы регулировалось по высоте», «умеет регулироваться»
+    r"регулировал\w*|регулирующ\w*"
 )
 ADJUSTABLE_FALSE_RE = re.compile(
-    r"без\s+регулировк|не\s+регулир\w*|фиксированн\w*\s+высот|"
-    r"без\s+подъем|жестк\w*\s+высот"
+    r"без\s+регулировк|нерегулир\w*|не\s+регулир\w*|фиксированн\w*\s+высот|"
+    r"без\s+подъем|жестк\w*\s+высот|"
+    r"регулировк\w*\s+(?:мне\s+)?не\s+(?:нужн|требу\w*|интересн)\w*|"
+    r"подъем\w*\s+(?:мне\s+)?не\s+(?:нужн|требу\w*|интересн)\w*"
 )
 
 #: Основы названий категорий для поиска отказа от товара.
@@ -198,6 +204,9 @@ def _lexicon_slots(normalized: str) -> Slots:
     unsupported_hits = lexicon.scan_unsupported_categories(tokens)
 
     # Явное изменение города внутри реплики: последнее упоминание побеждает.
+    # Несколько городов («Таганрог или Азов») — решение команды (docs/QA-ERRORS.md,
+    # «Вне области задачи»): §3 требует ОДИН город, поэтому берётся последний,
+    # а варианты в обоих городах не собираются.
     city_id = city_hits[-1].value if city_hits else None
     city_unknown = None
     if city_id is None and foreign_city_hits:
@@ -297,10 +306,29 @@ def _is_place_use(tokens: Sequence[str], position: int) -> bool:
     Ложное срабатывание безопасно: категория просто не добавляется, и работает
     обычный путь — уточнение или (если есть бюджет и город) вызов модели.
 
+    Исключение — деньги: «бюджет 20 000 рублей **на стол** и кресло» — это набор
+    из стола и кресла, а не место. Если перед предлогом стоит сумма или денежное
+    слово, слово категории означает товар. Без этой ветки покупатель просил стол,
+    а получал только кресла: категория пропадала молча.
+
     Сложность: O(1). Крайние случаи: слово в начале фразы (position=0) → False;
     «стол под ноутбук» → False (предлог стоит ПОСЛЕ названия товара).
     """
-    return position > 0 and tokens[position - 1] in PLACE_PREPOSITIONS
+    if position == 0 or tokens[position - 1] not in PLACE_PREPOSITIONS:
+        return False
+    return not _money_context_before(tokens, position - 1)
+
+
+def _money_context_before(tokens: Sequence[str], preposition: int) -> bool:
+    """Перед предлогом стоит сумма или денежное слово («20 000 рублей на стол»)."""
+    if preposition == 0:
+        return False
+    previous = tokens[preposition - 1]
+    return (
+        previous.isdigit()
+        or previous in MONEY_HINTS
+        or UNIT_WORDS.get(previous) == UNIT_RUB
+    )
 
 
 def _detect_removals(normalized: str) -> tuple[str, ...]:

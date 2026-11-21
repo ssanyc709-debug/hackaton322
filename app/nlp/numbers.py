@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Sequence
 
 from app.model import Bound, NumericRange
@@ -482,7 +482,9 @@ def _unit_after(tokens: Sequence[str], index: int, value: float) -> tuple[str | 
     Возвращает ``(единица, следующий индекс, значение)``. Отдельно решается
     неоднозначность «к»: «15 к» — это тысячи рублей, «4000 к» — кельвины.
     Множители («тысяч», «тыс», «млн») применяются до единицы, поэтому
-    «15 тысяч рублей» даёт 15000 ₽, а не 15 без единицы.
+    «15 тысяч рублей» даёт 15000 ₽, а не 15 без единицы. Сокращения «т.р.»,
+    «тр», «т. руб» токенизатор разбирает как «т» + «р», поэтому они
+    распознаются отдельно: без этого «до 20 т.р.» давало бюджет 20 ₽.
     """
     while index < len(tokens) and tokens[index] in MULTIPLIER_WORDS:
         value *= MULTIPLIER_WORDS[tokens[index]]
@@ -494,6 +496,11 @@ def _unit_after(tokens: Sequence[str], index: int, value: float) -> tuple[str | 
         return UNIT_K, index + 1, value
     if token in ("к", "k") and value <= KELVIN_THRESHOLD:
         return None, index + 1, value * 1000
+    if token == "тр":
+        return UNIT_RUB, index + 1, value * 1000
+    if token == "т" and index + 1 < len(tokens) and tokens[index + 1].startswith("р"):
+        # «20 т.р.», «20 т. руб» → 20 000 ₽ (тысячи рублей).
+        return UNIT_RUB, index + 2, value * 1000
     unit = UNIT_WORDS.get(token)
     if unit is not None:
         return unit, index + 1, value
@@ -513,23 +520,56 @@ def find_amounts(text: str) -> tuple[Amount, ...]:
     Алгоритм: токенизация → линейный проход; на каждом числовом токене читается
     число (цифрами или словами), затем множитель и единица справа, затем
     сравнительная конструкция слева (до 3 слов). Отдельная ветка — единица
-    без числа («не шире метра» = 1 метр).
+    без числа («не шире метра» = 1 метр). Пары «80-100» через дефис сводятся в
+    диапазон: покупатель пишет так чаще, чем «от 80 до 100».
     Сложность: время O(tokens · 3), то есть O(len(text)); память O(числа чисел).
     Почему именно он: один проход с локальным окном ±3 токена дешевле, чем
     полноценный синтаксический разбор, и покрывает все формулировки из контракта.
     Крайние случаи: «1,5 метра» → 150 см; «15к» → 15000; «4000 к» → кельвины;
     «не шире метра» (без цифры) → 100 см; «стол шириной метр» → ровно 100 см;
     «влезало в нишу 142 см» → ``upper_inc 142`` (место ограничено, а не стол);
+    «стол 80-100 см» → диапазон 80..100, а не «ровно 100»;
+    «сантиметров 90 в ширину» → 90 см (единица перед числом);
+    «до 20 т.р.» → 20 000 ₽ (сокращение тысяч рублей);
     «от 3000 до 5000» — два отдельных Amount, их объединяет
     :func:`collect_constraints`; «15 000 ₽ за всё» → деньги.
     Вызывается из: app/nlp/extract.py::extract_message.
     """
     normalized = normalize_text(text)
     tokens = tokenize(normalized)
+    spans = [match.span() for match in _TOKEN_RE.finditer(normalized)]
     amounts: list[Amount] = []
     index = 0
     while index < len(tokens):
         token = tokens[index]
+
+        # Обратный порядок единицы: «сантиметров 90», «рублей пятьсот».
+        # Слово единицы перед числом относится именно к нему; без этой ветки
+        # «сантиметров 90 в ширину» теряло ширину, а «рублей пятьсот» — бюджет.
+        if token in UNIT_WORDS and token not in ("к", "k"):
+            value, next_index, found = _consume_number(tokens, index + 1)
+            if found:
+                unit = UNIT_WORDS[token]
+                if unit == UNIT_M:
+                    value *= 100
+                    unit = UNIT_CM
+                kind, trigger = _lookback_trigger(tokens, index)
+                if kind == NO_TRIGGER:
+                    window = [t for t in tokens[max(0, index - 3):index] if t.isalpha()]
+                    if any(t in WIDTH_MARKERS for t in window):
+                        kind, trigger = EXACT, "ширина"
+                amounts.append(
+                    Amount(
+                        value=int(round(value)),
+                        unit=unit,
+                        kind=kind,
+                        trigger=trigger,
+                        position=index,
+                        raw=" ".join(tokens[index:next_index]),
+                    )
+                )
+                index = max(next_index, index + 1)
+                continue
 
         # Единица без числа: «не шире метра», «до метра», «от метра»,
         # «стол шириной метр» (слово «ширина» рядом делает значение точным).
@@ -562,7 +602,71 @@ def find_amounts(text: str) -> tuple[Amount, ...]:
             continue
 
         index = _append_amount(amounts, tokens, index, value, next_index)
-    return tuple(amounts)
+    return tuple(_join_dash_ranges(amounts, normalized, spans, tokens))
+
+
+def _inherit_multiplier(
+    tokens: Sequence[str],
+    right_position: int,
+    left: Amount,
+    right: Amount,
+) -> Amount:
+    """Переносит множитель правого конца диапазона на левый («3-4 тысячи»).
+
+    Слово-множитель стоит после второго числа, поэтому левое число оставалось
+    единицей: «3-4 тысячи кельвинов» давало 3..4000 K. Перенос делается только
+    при правдоподобном результате (левый конец не больше правого) — иначе число
+    намеренно оставляется как есть, чтобы не выдумать условие.
+    """
+    for token in tokens[right_position + 1:right_position + 3]:
+        multiplier = MULTIPLIER_WORDS.get(token)
+        if multiplier is None:
+            continue
+        scaled = left.value * multiplier
+        if left.value < multiplier and scaled <= right.value:
+            return replace(left, value=scaled, unit=right.unit or left.unit)
+        return left
+    return left
+
+
+def _join_dash_ranges(
+    amounts: Sequence[Amount],
+    normalized: str,
+    spans: Sequence[tuple[int, int]],
+    tokens: Sequence[str],
+) -> list[Amount]:
+    """Сводит «80-100» в диапазон: первое число — нижняя граница, второе — верхняя.
+
+    Зачем: диапазон через дефис пишут чаще, чем «от 80 до 100», и без этой ветки
+    «стол 80-100 см» читалось как «ровно 100» (число перед единицей побеждало),
+    а «лампа 3000-4000 K» — как бюджет 3000 и точная температура 4000. Оба
+    случая давали покупателю неверный подбор.
+
+    Позиции берутся из ``_TOKEN_RE.finditer``: соседние токены, между которыми в
+    исходной строке стоит только дефис. Поэтому «100, 15000» диапазоном **не**
+    становится (там запятая), а «Ростов-на-Дону» не содержит чисел вообще.
+
+    Множитель достаётся и левому концу: в «3-4 тысячи кельвинов» слово «тысячи»
+    стоит после второго числа, но относится к обоим — иначе получался диапазон
+    3..4000 K, который не описывает ни одну лампу.
+    """
+    if len(amounts) < 2:
+        return list(amounts)
+    by_position = {amount.position: index for index, amount in enumerate(amounts)}
+    result = list(amounts)
+    for position, left_index in sorted(by_position.items()):
+        right_index = by_position.get(position + 1)
+        if right_index is None:
+            continue
+        if spans[position + 1][0] > len(normalized):
+            continue
+        gap = normalized[spans[position][1]:spans[position + 1][0]].strip()
+        if gap != "-":
+            continue
+        result[left_index] = _inherit_multiplier(tokens, position + 1, result[left_index], result[right_index])
+        result[left_index] = replace(result[left_index], kind=LOWER_INC)
+        result[right_index] = replace(result[right_index], kind=UPPER_INC)
+    return result
 
 
 def to_bounds(pair: Sequence[Amount]) -> NumericRange:
