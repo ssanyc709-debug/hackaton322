@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from app.catalog.index import CatalogIndex
@@ -15,7 +16,7 @@ from app.config import Settings
 from app.contract import response
 from app.contract.request import Request
 from app.nlp.cache import LexiconCache
-from app.nlp.extract import Resolver, missing_fields
+from app.nlp.extract import Resolver, is_unintelligible, missing_fields
 from app.nlp.merge import merge_history
 
 
@@ -60,6 +61,20 @@ def answer(
         resolver=resolver,
         allow_model=settings.llm_available and resolver is not None,
     )
+
+    # Непонятная последняя реплика не подтверждает прежний набор категорий
+    # (CONTRACT.md §3): «ыаллфдылааввы» — это не «продолжай». Сбрасываем ровно
+    # категории, чтобы missing_fields спросил их заново; город и бюджет,
+    # названные ранее, повторно не спрашиваются.
+    if request.user_texts and is_unintelligible(request.user_texts[-1]):
+        slots = replace(
+            slots,
+            categories=(),
+            categories_unknown=(),
+            categories_removed=(),
+            categories_explicit=False,
+            categories_additive=False,
+        )
 
     missing = missing_fields(slots)
     if missing:

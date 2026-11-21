@@ -30,13 +30,19 @@ from app.model import (
     Slots,
 )
 from app.nlp.cache import LexiconCache
-from app.nlp.lexicon import get_lexicon, order_categories
+from app.nlp.lexicon import (
+    NOISE_WORDS,
+    STOPWORD_GUARDS,
+    get_lexicon,
+    order_categories,
+)
 from app.nlp.numbers import (
     LOWER_INC,
     LOWER_STRICT,
     # граница правдоподобной ширины стола, см (защита от «100 метров»)
     MAX_WIDTH_CM,
     UNIT_RUB,
+    FILLER_WORDS,
     collect_constraints,
     find_amounts,
     normalize_text,
@@ -527,6 +533,130 @@ def _city_hint(texts: Sequence[str]) -> bool:
         if any(token in CITY_PREPOSITIONS for token in tokenize(normalize_text(text))):
             return True
     return False
+
+
+#: Короткие осмысленные ответы покупателя: подтверждение, благодарность,
+#: приветствие. Такая реплика НЕ является мусором, даже если в ней нет ни одного
+#: условия и ни одного числа: «спасибо» — это ответ, а не непонятный текст.
+CONFIRMATION_WORDS: frozenset[str] = frozenset(
+    {
+        "спасибо", "благодарю", "пожалуйста", "да", "нет", "ок", "окей", "хорошо",
+        "ладно", "понятно", "ясно", "ага", "угу", "привет", "здравствуйте",
+        "беру", "подходит",
+    }
+)
+
+#: Минимальная длина «содержательного» слова для детектора непонятной реплики:
+#: короткие слова («ок», «ну») слишком шумные и мусором не считаются.
+MIN_UNINTELLIGIBLE_TOKEN = 4
+
+#: Гласные (русские и латинские) и предел цепочки согласных.
+#: Слово, в котором 4+ согласных подряд, — это набор букв, а не слово:
+#: «ыаллфдылааввы» (ллфд), «asdfgh» (dfgh). Обычная русская речь такого не даёт.
+_VOWELS: frozenset[str] = frozenset("аеиоуыэюяaeiouy")
+MAX_CONSONANT_RUN = 4
+
+#: Признак «набор букв», а не слова: слишком мало разных букв («фффффф»).
+MIN_DISTINCT_LETTERS = 3
+
+
+def _looks_like_gibberish(token: str) -> bool:
+    """Похоже ли слово на случайный набор букв, а не на слово языка.
+
+    Зачем: без этого детектор считал мусором любое незнакомое слово, и законная
+    реплика «Покажи варианты» (условий не меняет, но осмысленна) обнуляла
+    категории. Проверка идёт по форме слова, а не по словарю: словаря всей
+    русской лексики у нас нет, а «ссылку на словарь» заменить нечем.
+
+    Сложность: O(len(token)). Крайние случаи: «фффффф» → True (мало разных букв);
+    «ыаллфдылааввы» → True (цепочка «ллфд»); «Покажи» → False; слово без гласных
+    («взгляд» → «взгл») тоже считается набором букв — как самостоятельный ответ
+    на уточнение оно бессмысленно и требует переспроса.
+    """
+    if len(set(token)) < MIN_DISTINCT_LETTERS:
+        return True
+    run = 0
+    for letter in token:
+        if letter in _VOWELS:
+            run = 0
+            continue
+        run += 1
+        if run >= MAX_CONSONANT_RUN:
+            return True
+    return False
+
+
+def is_unintelligible(text: str) -> bool:
+    """CORE. Является ли реплика непонятной (не подтверждает прежние условия).
+
+    Зачем: реплика, в которой не распознано НИ ОДНОГО условия и нет ни одного
+    числа, не должна молча подтверждать прежний подбор — иначе «ыаллфдылааввы»
+    читается как «продолжай, я согласен», и покупатель получает старый комплект
+    вместо уточнения (CONTRACT.md §3: явное изменение заменяет, остальное живёт).
+
+    Вход:  text — сырая реплика покупателя.
+    Выход: True, если реплика непонятна; False для осмысленных ответов
+    («спасибо», «ок», «15 тысяч», «нужен Азов», «добавь лампу»).
+
+    Алгоритм (0 токенов модели): нормализация → если есть числа, это ответ
+    (False) → локальный разбор лексиконом: любое распознанное условие (город,
+    категория, бюджет, ширина, температура, регулировка, снятие ограничения)
+    означает понятную реплику → иначе проход по словам: слово «понятно», если
+    это город/категория (включая неподдерживаемые), шум, служебное слово или
+    подтверждение; слово «мусор», если оно похоже на набор букв
+    (:func:`_looks_like_gibberish`). Реплика непонятна, когда есть мусор и НЕТ
+    ни одного понятного слова: «ыаллфдылааввы» и «фффффф» — мусор, а «Покажи
+    варианты» и «Спасибо!» — осмысленные ответы без новых условий.
+    Сложность: O(len(text)) на нормализацию и проход по токенам.
+    Почему именно он: сначала бесплатный разбор, который уже есть в конвейере,
+    и только потом проверка «остались ли необъяснённые слова» — так детектор
+    не расходится с извлечением условий и не требует второй модели правил.
+    Крайние случаи: пустая реплика → False (нечего подтверждать); «ок» и другие
+    короткие ответы → False; «Хочу мебель» без прочих условий → False (есть
+    служебное слово «хочу», реплика осмысленная, но условий не даёт); опечатка
+    категории («стлл») → False, её распознаёт нечёткий поиск лексикона.
+    Вызывается из: app/pipeline.py::answer, тесты.
+    """
+    normalized = normalize_text(text)
+    if not normalized:
+        return False
+    if find_amounts(normalized):
+        # Любое число — это ответ покупателя (бюджет, ширина, количество),
+        # а не мусор: «15 тысяч» обязано сохранять прежний подбор.
+        return False
+
+    slots = _lexicon_slots(normalized)
+    if slots.mentioned:
+        return False
+
+    tokens = tokenize(normalized)
+    lexicon = get_lexicon()
+    known_positions: set[int] = set()
+    for hits in (
+        lexicon.scan_cities(tokens),
+        lexicon.scan_categories(tokens),
+        lexicon.scan_unsupported_cities(tokens),
+        lexicon.scan_unsupported_categories(tokens),
+    ):
+        known_positions.update(hit.position for hit in hits)
+
+    garbage = False
+    understood = False
+    for position, token in enumerate(tokens):
+        if not token.isalpha():
+            continue
+        if (
+            position in known_positions
+            or token in CONFIRMATION_WORDS
+            or token in NOISE_WORDS
+            or token in STOPWORD_GUARDS
+            or token in FILLER_WORDS
+        ):
+            understood = True
+            continue
+        if len(token) >= MIN_UNINTELLIGIBLE_TOKEN and _looks_like_gibberish(token):
+            garbage = True
+    return garbage and not understood
 
 
 def is_complete(slots: Slots) -> bool:

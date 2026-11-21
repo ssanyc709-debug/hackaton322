@@ -13,6 +13,14 @@ venv/
 
 # Служебные кэши (пересоздаются из каталога)
 data/cache/
+.cache/
 .pytest_cache/
 .idea/
 .vscode/
+
+# Отчёт тестировщика — рабочий артефакт QA, в репозиторий не идёт
+TEST_FAILURES.md
+
+# Мусор ОС
+.DS_Store
+Thumbs.db
