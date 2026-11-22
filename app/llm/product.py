@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 
 from app.config import LlmConfig
-from app.llm.client import complete
+from app.llm.client import complete, prepare_user_text
 
 _SCHEMA = {
     "type": "object",
@@ -38,7 +38,7 @@ def make_product_resolver(
     def resolve(text: str) -> str:
         raw = complete_fn(
             config,
-            [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": text}],
+            [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prepare_user_text(text)}],
             deadline,
             max_tokens=64,
             schema=_SCHEMA,

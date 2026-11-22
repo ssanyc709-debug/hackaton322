@@ -37,6 +37,7 @@ from app.nlp.lexicon import (
     order_categories,
 )
 from app.nlp.numbers import (
+    Constraints,
     LOWER_INC,
     LOWER_STRICT,
     MONEY_HINTS,
@@ -54,6 +55,7 @@ from app.nlp.product_intent import GENERIC_PRODUCT_WORDS
 MIN_BUDGET_GUESS = 1000
 #: Виды границ, которые ограничивают значение снизу и потолком бюджета быть не могут.
 NON_CAPPING_KINDS = frozenset({LOWER_INC, LOWER_STRICT})
+_BUDGET_REVISION_WORDS = frozenset({"теперь", "передумал", "передумала", "вместо"})
 #: Нижняя/верхняя границы правдоподобной цветовой температуры, K.
 MIN_KELVIN = 1500
 MAX_KELVIN = 9000
@@ -86,7 +88,7 @@ _STEMS = "|".join(CATEGORY_STEM_TO_ID)
 REMOVAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(rf"(?:без|убери|уберите|исключи|исключите|кроме)\s+(?:мне\s+)?({_STEMS})"),
     re.compile(rf"(?:не\s+надо|не\s+нужн\w*|не\s+хочу|не\s+интересн\w*)\s+(?:мне\s+)?({_STEMS})"),
-    re.compile(rf"({_STEMS})\w*\s+(?:не\s+(?:надо|нужн\w*|хочу|интересн\w*)|убери|уберите)"),
+    re.compile(rf"({_STEMS})\w*\s+(?:(?:больше\s+)?не\s+(?:надо|нужн\w*|хочу|интересн\w*)|убери|уберите)"),
 )
 
 #: «Добавь ещё», а не «замени всё»: при таких словах категории объединяются с прежними.
@@ -215,6 +217,10 @@ def _lexicon_slots(normalized: str) -> Slots:
     if foreign_city_hits and (not city_hits or foreign_city_hits[-1].position >= city_hits[-1].position):
         city_id = None
         city_unknown = foreign_city_hits[-1].value
+    mentions = sorted((*city_hits, *foreign_city_hits), key=lambda hit: hit.position)
+    if any(left.value != right.value and {"или", "либо"}.intersection(tokens[left.position + 1:right.position])
+           for left, right in zip(mentions, mentions[1:])):
+        city_id = city_unknown = None
 
     categories = order_categories(hit.value for hit in category_hits)
     seat = _SEAT_WITH_BACK.search(normalized)
@@ -239,7 +245,7 @@ def _lexicon_slots(normalized: str) -> Slots:
         for hit in (*category_hits, *unsupported_hits)
         if hit.how != "fuzzy"
     }
-    amounts = (
+    amounts = tuple(
         amount
         for amount in find_amounts(normalized)
         if amount.unit is not None
@@ -252,18 +258,14 @@ def _lexicon_slots(normalized: str) -> Slots:
     constraints = collect_constraints(amounts)
     width = constraints.width
     temperature = constraints.temperature
-    budget = constraints.budget_rub
-
-    if budget is None:
-        for group in constraints.neutral_groups:
-            if "lamp" in categories and temperature is None and len(group) > 1 and all(
-                MIN_KELVIN <= amount.value <= MAX_KELVIN for amount in group
-            ):
-                continue
-            caps = [amount.value for amount in group if amount.kind not in NON_CAPPING_KINDS]
-            if caps and max(caps) >= MIN_BUDGET_GUESS:
-                budget = max(caps)
-                break
+    budget = _budget_from_constraints(constraints, categories)
+    revision = next((i for i in range(len(tokens) - 1, -1, -1) if tokens[i] in _BUDGET_REVISION_WORDS), None)
+    if revision is not None and any(amount.position < revision for amount in amounts):
+        revised = _budget_from_constraints(
+            collect_constraints(amount for amount in amounts if amount.position > revision), categories,
+        )
+        if revised is not None:
+            budget = revised
 
     adjustable = _detect_adjustable(normalized)
 
@@ -278,7 +280,7 @@ def _lexicon_slots(normalized: str) -> Slots:
         fields_removed = tuple(field for field in fields_removed if field != FIELD_ADJUSTABLE)
 
     mentioned: set[str] = set()
-    if city_id is not None or city_unknown is not None:
+    if mentions:
         mentioned.add(FIELD_CITY)
     if budget is not None:
         mentioned.add(FIELD_BUDGET)
@@ -310,6 +312,21 @@ def _lexicon_slots(normalized: str) -> Slots:
         mentioned=frozenset(mentioned),
         source="lexicon",
     )
+
+
+def _budget_from_constraints(constraints: Constraints, categories: tuple[str, ...]) -> int | None:
+    """Берёт явный бюджет или подходящую числовую группу без единицы."""
+    if constraints.budget_rub is not None:
+        return constraints.budget_rub
+    for group in constraints.neutral_groups:
+        if "lamp" in categories and constraints.temperature is None and len(group) > 1 and all(
+            MIN_KELVIN <= amount.value <= MAX_KELVIN for amount in group
+        ):
+            continue
+        cap = max((amount.value for amount in group if amount.kind not in NON_CAPPING_KINDS), default=0)
+        if cap >= MIN_BUDGET_GUESS:
+            return cap
+    return None
 
 
 def _is_place_use(tokens: Sequence[str], position: int) -> bool:
@@ -696,6 +713,6 @@ def missing_fields(slots: Slots) -> tuple[str, ...]:
         missing.append(FIELD_CITY)
     if slots.budget_rub is None:
         missing.append(FIELD_BUDGET)
-    if not slots.categories or slots.categories_unknown:
+    if not slots.categories or slots.categories_unknown or slots.categories_uncertain:
         missing.append(FIELD_CATEGORIES)
     return tuple(missing)

@@ -299,20 +299,7 @@ class CategoryHistoryTest(HistoryCase):
 
 
 class MultipleCitiesTest(HistoryCase):
-    """Несколько городов в запросе: контракт требует «один город», остальные не берутся.
-
-    Контракт §3: «Помощник извлекает … общий бюджет в рублях, **один город** и
-    необязательные ограничения». §2 добавляет, что комплект собирается для
-    самовывоза в одном городе — это правило соблюдается: внутри варианта города
-    не смешиваются (``test_each_option_is_within_one_city`` проходит).
-
-    Поэтому «в Таганроге или в Азове» по ТЗ означает «взять один город»
-    (сейчас — последний упомянутый), и варианты в обоих городах контракт не
-    требует. Тесты ниже описывают поведение, которого в ТЗ **нет**: они остаются
-    в наборе как документация границы и помечены ``skip`` с явной причиной.
-    Мульти-город сознательно не реализуется (решение команды, см.
-    ``docs/QA-ERRORS.md``, раздел «Вне области задачи»).
-    """
+    """Альтернативные города требуют уточнения перед подбором одного города."""
 
     def cities_per_option(self, document: Mapping[str, Any]) -> list[set[str]]:
         return [
@@ -321,11 +308,15 @@ class MultipleCitiesTest(HistoryCase):
         ]
 
     def test_each_option_is_within_one_city(self) -> None:
-        document = dialogue(user("Стол, кресло и лампа в Таганроге или в Азове до 12 000 ₽"))
+        query = "Стол, кресло и лампа в Таганроге или в Азове до 12 000 ₽"
+        question = dialogue(user(query))
+        self.assertEqual(question.get("status"), "clarify", question)
+        self.assertEqual([item["field"] for item in question["questions"]], ["city_id"])
+        document = dialogue(user(query), assistant(question["questions"][0]["text"]), user("В Азове"))
         self.assertEqual(document.get("status"), "ok", document)
         for index, cities in enumerate(self.cities_per_option(document)):
             with self.subTest(option=index):
-                self.assertEqual(len(cities), 1, f"вариант смешал города: {sorted(cities)}")
+                self.assertEqual(cities, {"azov"})
 
     @unittest.skip("вне ТЗ §3: «извлекается один город», варианты в обоих не требуются")
     def test_both_cities_are_presented(self) -> None:

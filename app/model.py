@@ -123,5 +123,6 @@ class Slots:
     categories_additive: bool = False
     mentioned: frozenset[str] = frozenset()
     source: str = "lexicon"
+    categories_uncertain: bool = False
 
 

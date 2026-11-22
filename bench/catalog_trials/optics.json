@@ -1,0 +1,11 @@
+{
+  "products": [
+    {"id":"bin-1","title":"Бинокль складной","price_rub":1450,"city_id":"psk","city_name":"Псков"},
+    {"id":"bin-2","title":"Бинокль туристический","price_rub":1800,"city_id":"psk","city_name":"Псков"},
+    {"id":"bin-3","title":"Бинокль театральный","price_rub":900,"city_id":"kom","city_name":"Комсомольск-на-Амуре"},
+    {"id":"scope-1","title":"Телескоп учебный","price_rub":5900,"city_id":"psk","city_name":"Псков"},
+    {"id":"tripod-1","title":"Штатив настольный для экшен-камеры","price_rub":790,"city_id":"psk","city_name":"Псков","keywords":{"alternate":["тренога для камеры"]}},
+    {"id":"tripod-2","title":"Штатив металлический для телескопа","price_rub":550,"city_id":"psk","city_name":"Псков"},
+    {"id":"camera-1","title":"Экшен-камера 4K","price_rub":2100,"city_id":"psk","city_name":"Псков"}
+  ]
+}

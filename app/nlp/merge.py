@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Iterable, Sequence
 
 from app.model import (
@@ -36,6 +36,15 @@ from app.nlp.product_intent import describes_product, requests_product
 #: Разделитель реплик в одном тексте для модели: модель видит диалог одним куском.
 MODEL_TEXT_SEPARATOR = " / "
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?;])\s+|[\r\n]+")
+_CLAUSE_BOUNDARY = re.compile(r"[.;!?]\s*|,\s*|\s+(?:и|а|но)\s+", re.I)
+_EXPLICIT_REPLACEMENT = re.compile(r"\b(?:только|вместо|теперь|передумал(?:а)?)\b", re.I)
+
+
+@dataclass(frozen=True)
+class PendingProduct:
+    position: int
+    text: str
+    excluded: tuple[str, ...]
 
 
 def merge_history(
@@ -80,22 +89,50 @@ def merge_history(
     state = Slots()
     product_start = 0
     active_resolver = resolver if allow_model else None
+    pending: PendingProduct | None = None
     for position, text in enumerate(user_texts):
         # Локальный разбор каждой реплики: модель здесь не нужна, решение о вызове
         # принимается ниже — по СОСТОЯНИЮ ПОСЛЕ всей истории, а не по одной реплике.
         step = extract_message(text, cache=cache, resolver=None, allow_model=False)
+        description = _trailing_product_description(text, bool(step.categories_removed)) if step.categories_explicit else None
+        if (pending is not None and description is None and step.categories
+                and not step.categories_removed and not step.categories_unknown
+                and not _EXPLICIT_REPLACEMENT.search(text) and not requests_product(text)):
+            step = replace(step, categories_additive=True)
         state = merge_step(state, step)
         if step.categories_explicit:
             product_start = position + 1
-        elif (active_resolver is not None and not model_can_help(state)
+            pending = PendingProduct(position, description, step.categories_removed) if description else None
+        elif (pending is None and active_resolver is not None and not model_can_help(state)
               and (describes_product(text)
                    or (step.mentioned <= {FIELD_CITY, FIELD_BUDGET} and requests_product(text)))
               and has_product_context(text, step)):
             product_start = position
             state = replace(state, categories=(), categories_unknown=(), categories_explicit=False)
+    if pending is not None:
+        if active_resolver is None:
+            return replace(state, categories_uncertain=True)
+        descriptions = (pending.text, *user_texts[pending.position + 1:])
+        resolved = resolve_missing(replace(state, categories=(), categories_unknown=()), descriptions, active_resolver)
+        extra = set(resolved.categories) - set(pending.excluded) - set(state.categories)
+        return replace(state, categories=order_categories((*state.categories, *extra)),
+                       categories_uncertain=not extra, source="model" if extra else state.source)
     if active_resolver is not None:
         state = resolve_missing(state, user_texts[product_start:], active_resolver)
     return state
+
+
+def _trailing_product_description(text: str, after_removal: bool) -> str | None:
+    """Находит просьбу о ещё одном товаре после явного названия или отказа."""
+    for boundary in reversed(list(_CLAUSE_BOUNDARY.finditer(text))):
+        description = text[boundary.end():].strip()
+        independent = after_removal or boundary.group().strip().casefold() == "и"
+        if not (describes_product(description) or (independent and requests_product(description))):
+            continue
+        parsed = extract_message(description)
+        if not parsed.categories_explicit and has_product_context(description, parsed):
+            return description
+    return None
 
 
 def dialogue_text(user_texts: Sequence[str]) -> str:

@@ -235,6 +235,28 @@ class ModelCallPolicyTest(unittest.TestCase):
                 self.assertEqual(slots.budget_rub, 3500)
                 self.assertEqual(missing_fields(slots), () if categories else (FIELD_CATEGORIES,))
 
+    def test_mixed_request_preserves_known_product_and_resolves_other_part(self) -> None:
+        query = "Нужен стол и что-нибудь, чтобы читать в темноте. Таганрог до 5000 ₽"
+        result = merge_history(
+            [query], resolver=lambda prompt, slots: self.calls.append(prompt) or {"categories": ["lamp"]},
+        )
+        self.assertEqual(result.categories, ("table", "lamp"))
+        self.assertEqual(len(self.calls), 1)
+        self.assertNotIn("Нужен стол", self.calls[0])
+
+        unresolved = merge_history([query], resolver=lambda *_: {"categories": []})
+        self.assertEqual(missing_fields(unresolved), (FIELD_CATEGORIES,))
+        self.assertEqual(merge_history([query, "Лампа"]).categories, ("table", "lamp"))
+
+    def test_removal_and_new_description_do_not_restore_old_item(self) -> None:
+        result = merge_history(
+            ["Лампа в Таганроге до 5000 ₽", "Лампа больше не нужна, хочу деревяшку с четырьмя ножками"],
+            resolver=lambda prompt, slots: self.calls.append(prompt) or {"categories": ["table"]},
+        )
+        self.assertEqual(self.calls, ["хочу деревяшку с четырьмя ножками"])
+        self.assertEqual(result.categories, ("table",))
+        self.assertEqual(result.budget_rub, 5000)
+
     def test_long_dialogue_falls_back_to_last_message(self) -> None:
         """История длиннее предела модели: в один вызов уходит последняя реплика."""
         from app.nlp.extract import MAX_MODEL_TEXT_BYTES
@@ -251,6 +273,18 @@ class ClarifyFlowTest(unittest.TestCase):
     def fields(self, document: dict) -> list[str]:
         self.assertEqual(document["status"], "clarify", document)
         return [question["field"] for question in document["questions"]]
+
+    def test_budget_correction_and_inclusive_minimum_in_one_turn(self) -> None:
+        text = "Лампа в Таганроге не ниже 4000 К. Сначала до 15000 ₽, теперь до 12000 ₽."
+        slots = merge_history([text])
+        self.assertEqual(slots.budget_rub, 12000)
+        self.assertIsNone(slots.color_temperature.upper)
+        self.assertEqual(slots.color_temperature.lower.value, 4000)
+        self.assertTrue(slots.color_temperature.lower.inclusive)
+        by_id = {row["id"]: row for row in DOCUMENT}
+        for option in run([text])["options"]:
+            listing_id, = option["listing_ids"]
+            self.assertGreaterEqual(by_id[listing_id]["attributes"]["color_temperature_k"], 4000)
 
     def test_example_02_asks_only_budget(self) -> None:
         self.assertEqual(self.fields(run(["Стол не шире метра, кресло и лампа. Таганрог."])),

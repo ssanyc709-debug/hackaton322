@@ -16,11 +16,14 @@ stdin → stdout), а карточки товаров читаются из за
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -35,6 +38,7 @@ if not __package__:
     sys.path.insert(0, str(ROOT))  # запуск напрямую через python web/serve.py
 
 from app.catalog import CatalogError, load_json_data, parse_catalog_source
+from app.llm.dialogue import CURRENT_RESULT, PREVIOUS_RESULT
 
 #: Белый список статики: имя файла → Content-Type. Путь из URL никогда не
 #: превращается в путь файловой системы, поэтому `..` и NUL-байты бесполезны.
@@ -278,7 +282,8 @@ def backend_metrics(stderr: bytes) -> dict[str, Any]:
 
 
 def call_backend(
-    payload: dict[str, Any], catalog_path: Path | str, env: dict[str, str], *, text_search: bool = False,
+    payload: dict[str, Any], catalog_path: Path | str, env: dict[str, str], *,
+    text_search: bool = False, dialogue_analysis_dir: Path | None = None,
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
     """CORE. Один запрос диалога → ответ бэкенда как есть.
 
@@ -300,6 +305,8 @@ def call_backend(
     ]
     if text_search:
         command.append("--text-search")
+    if dialogue_analysis_dir is not None:
+        command.extend(("--dialogue-analysis-dir", str(dialogue_analysis_dir)))
     try:
         with BACKEND_LOCK:
             completed = subprocess.run(
@@ -397,6 +404,11 @@ def validate_request_body(raw: bytes) -> tuple[dict[str, Any] | None, dict[str, 
 # --- HTTP -------------------------------------------------------------------
 
 
+def _history_digest(messages: Sequence[dict[str, str]]) -> str:
+    raw = json.dumps(messages, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 class Api:
     """Состояние сервера: каталог, путь к нему и режим офлайна."""
 
@@ -408,6 +420,29 @@ class Api:
         self.env = backend_env(offline)
         self.catalog_ok = True
         self.catalog_error: str | None = None
+        self._dialogue_lock = threading.Lock()
+        self._dialogues: dict[str, tuple[str, str]] = {}
+
+    def _prepare_dialogue(self, token: str, messages: Sequence[dict[str, str]], directory: Path) -> None:
+        if not token or len(messages) < 3:
+            return
+        with self._dialogue_lock:
+            previous = self._dialogues.get(token)
+        if previous is not None and previous[0] == _history_digest(messages[:-2]):
+            (directory / PREVIOUS_RESULT).write_text(previous[1], encoding="utf-8")
+
+    def _save_dialogue(self, directory: Path, messages: Sequence[dict[str, str]], metrics: dict[str, Any]) -> None:
+        output = directory / CURRENT_RESULT
+        if not output.is_file():
+            return
+        record = (_history_digest(messages), output.read_text(encoding="utf-8"))
+        token = secrets.token_urlsafe(24)
+        with self._dialogue_lock:
+            self._dialogues[token] = record
+            if len(self._dialogues) > 64:
+                self._dialogues.pop(next(iter(self._dialogues)))
+        metrics["dialogue_token"] = token
+        metrics["model_reused"] = not metrics.get("model_calls")
 
     def server_info(self) -> dict[str, Any]:
         """Состояние сервера для заголовков ответа: каталог и режим модели."""
@@ -434,13 +469,37 @@ class Api:
             return 500, {"error": str(exc)}
         return 200, {"total": len(items), "items": items, "missing": missing}
 
-    def answer(self, raw_body: bytes) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    def answer(
+        self, raw_body: bytes, *, include_cards: bool = False, dialogue_token: str = "",
+    ) -> tuple[int, dict[str, Any], dict[str, Any]]:
         """``POST /api/answer`` — вызов бэкенда отдельным процессом."""
         payload, error = validate_request_body(raw_body)
         if error is not None:
             return 400, error, {}
         assert payload is not None
-        return call_backend(payload, self.catalog_path, self.env, text_search=self.text_search)
+        if not include_cards:
+            return call_backend(payload, self.catalog_path, self.env, text_search=self.text_search)
+
+        try:
+            document = load_json_data(self.catalog_path)
+            with tempfile.TemporaryDirectory(prefix="buyer-catalog-") as directory:
+                workspace = Path(directory)
+                snapshot = workspace / "catalog.json"
+                snapshot.write_text(json.dumps(document, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+                self._prepare_dialogue(dialogue_token, payload["messages"], workspace)
+                code, answer, metrics = call_backend(
+                    payload, snapshot, self.env, text_search=self.text_search, dialogue_analysis_dir=workspace,
+                )
+                if code != 200:
+                    return code, answer, metrics
+                self._save_dialogue(workspace, payload["messages"], metrics)
+                ids = tuple(dict.fromkeys(
+                    listing_id for option in answer.get("options", ()) for listing_id in option["listing_ids"]
+                ))
+                cards = Catalog(snapshot).find(ids)[0] if ids else []
+        except (ValueError, OSError, RuntimeError) as exc:
+            return 502, {"error": f"Каталог недоступен: {exc}"}, {}
+        return 200, {"answer": answer, "items": cards}, metrics
 
 
 def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
@@ -458,7 +517,8 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
             self._handle_get(head=True)
 
         def do_POST(self) -> None:  # noqa: N802
-            path = urlsplit(self.path).path
+            parts = urlsplit(self.path)
+            path = parts.path
             if path != "/api/answer":
                 if path == "/api/listings" or static_name(path) in STATIC_FILES:
                     self._allowed("POST", "GET, HEAD")
@@ -472,7 +532,10 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
             except BodyError as exc:
                 self._json(exc.status, {"error": exc.message})
                 return
-            status, payload, metrics = api.answer(body)
+            include_cards = parse_qs(parts.query).get("include") == ["cards"]
+            status, payload, metrics = api.answer(
+                body, include_cards=include_cards, dialogue_token=self.headers.get("X-Dialogue-Token", ""),
+            )
             self._json(status, payload, headers=self._metrics_headers(metrics))
 
         def do_PUT(self) -> None:  # noqa: N802
@@ -574,6 +637,10 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
                 headers["X-Model-Tokens"] = str(metrics["tokens"])
             if metrics.get("model_unavailable"):
                 headers["X-Model-Unavailable"] = "1"
+            if metrics.get("dialogue_token"):
+                headers["X-Dialogue-Token"] = metrics["dialogue_token"]
+            if metrics.get("model_reused"):
+                headers["X-Model-Reused"] = "1"
             return headers
 
         def _allowed(self, method: str, allow: str, *, head: bool = False) -> None:

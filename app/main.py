@@ -24,6 +24,7 @@ from app.contract.request import RequestError, parse_request
 from app.contract.response import ResponseError
 from app.jsonio import JsonError, loads_strict
 from app.llm.client import LlmError, make_resolver
+from app.llm.dialogue import DialogueAnalysis
 from app.llm.product import make_product_resolver
 from app.nlp.cache import LexiconCache
 from app.pipeline import answer
@@ -54,6 +55,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text-search", action="store_true", help="искать по названиям товаров без таксономии")
     parser.add_argument("--env-file", default=None, help="альтернативный .env (по умолчанию <repo>/.env)")
     parser.add_argument("--debug", action="store_true", help="подробная трассировка этапов в stderr")
+    parser.add_argument("--dialogue-analysis-dir", type=Path, help=argparse.SUPPRESS)
     return parser
 
 
@@ -151,11 +153,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not settings.llm_available:
         log("модель: недоступна (офлайн-режим или нет ключа), разбор только лексиконом")
     try:
+        analysis = DialogueAnalysis(args.dialogue_analysis_dir) if args.dialogue_analysis_dir else None
         if isinstance(index, TextCatalog):
             product_resolver = make_product_resolver(settings.llm, deadline) if settings.llm_available else None
+            if product_resolver is not None and analysis is not None:
+                product_resolver = analysis.wrap(product_resolver)
             document = index.answer(request.user_texts, resolver=product_resolver)
         else:
             resolver = make_resolver(settings.llm, deadline) if settings.llm_available else None
+            if resolver is not None and analysis is not None:
+                resolver = analysis.wrap(resolver)
             document = answer(
                 request=request,
                 index=index,

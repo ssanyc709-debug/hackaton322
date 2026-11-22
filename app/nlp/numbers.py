@@ -133,7 +133,8 @@ CAPPING_KINDS = (UPPER_INC, UPPER_STRICT, EXACT, NO_TRIGGER)
 #: поэтому «не уже» всегда побеждает «уже», а «не более» — «более».
 TRIGGER_PHRASES: dict[str, str] = {
     # включительная нижняя граница
-    "не менее": LOWER_INC, "не меньше": LOWER_INC, "не уже": LOWER_INC,
+    "не менее": LOWER_INC, "не меньше": LOWER_INC, "не ниже": LOWER_INC,
+    "не ниже чем": LOWER_INC, "не уже": LOWER_INC,
     "не уже чем": LOWER_INC, "от": LOWER_INC, "минимум": LOWER_INC,
     "начиная с": LOWER_INC, "от и": LOWER_INC, "минимум": LOWER_INC,
     # строгая нижняя граница
@@ -142,7 +143,7 @@ TRIGGER_PHRASES: dict[str, str] = {
     "побольше": LOWER_STRICT,
     # включительная верхняя граница
     "не более": UPPER_INC, "не больше": UPPER_INC, "не шире": UPPER_INC,
-    "не выше": UPPER_INC, "не дороже": UPPER_INC, "не превышает": UPPER_INC,
+    "не выше": UPPER_INC, "не выше чем": UPPER_INC, "не дороже": UPPER_INC, "не превышает": UPPER_INC,
     "в пределах": UPPER_INC, "уложиться в": UPPER_INC, "уложимся в": UPPER_INC,
     "до": UPPER_INC, "максимум": UPPER_INC, "около": UPPER_INC, "примерно": UPPER_INC,
     "где-то": UPPER_INC, "пределах": UPPER_INC,

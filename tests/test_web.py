@@ -17,12 +17,14 @@ import io
 import json
 import os
 import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.test_llm_client import API_KEY, MODEL, FakeGateway, envelope
+from web import serve
 from web.serve import ROOT, build_api, make_server
 
 CATALOG = ROOT / "data" / "catalog.json"
@@ -210,6 +212,38 @@ class WebGatewayTest(unittest.TestCase):
                 self.assertFalse(leaked, f"утечка содержимого по {path}")
 
 
+class CatalogSnapshotTest(unittest.TestCase):
+    def test_answer_and_cards_use_one_version_even_when_source_changes(self) -> None:
+        first_row = {"id": "same", "title": "Термос", "price": 900, "city": "Псков"}
+        later_row = {**first_row, "price": 1500, "city": "Калуга"}
+
+        def payload(text):
+            return json.dumps({"messages": [{"role": "user", "text": text}]}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "catalog.json"
+            source.write_text(json.dumps([first_row]), encoding="utf-8")
+            api = build_api(source, offline=True, text_search=True)
+            call_backend = serve.call_backend
+
+            def change_source(*args, **kwargs):
+                source.write_text(json.dumps([later_row]), encoding="utf-8")
+                return call_backend(*args, **kwargs)
+
+            with patch.object(serve, "call_backend", side_effect=change_source):
+                code, first, _ = api.answer(payload("Термос в Пскове до 1000 ₽"), include_cards=True)
+            self.assertEqual(code, 200, first)
+            self.assertEqual(first["answer"]["options"][0]["total_rub"], 900)
+            self.assertEqual(first["items"][0]["price_rub"], 900)
+            self.assertEqual(first["items"][0]["city_name"], "Псков")
+
+            code, later, _ = api.answer(payload("Термос в Калуге до 2000 ₽"), include_cards=True)
+            self.assertEqual(code, 200, later)
+            self.assertEqual(later["answer"]["options"][0]["total_rub"], 1500)
+            self.assertEqual(later["items"][0]["price_rub"], 1500)
+            self.assertEqual(later["items"][0]["city_name"], "Калуга")
+
+
 class ModelReportingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.gateway = FakeGateway().start()
@@ -263,6 +297,39 @@ class ModelReportingTest(unittest.TestCase):
         self.assertEqual(status, 502, body)
         self.assertEqual(headers["X-Model-Calls"], "1")
         self.assertNotIn("X-Model-Tokens", headers)
+
+    def test_web_reuses_recognized_product_when_user_answers_clarification(self) -> None:
+        self.gateway.enqueue(200, envelope({"categories": ["table"]}))
+        first = {"role": "user", "text": "Найди то, на чём можно писать"}
+
+        def send(messages, token=""):
+            return call(
+                self.server.port, "POST", "/api/answer?include=cards",
+                json.dumps({"messages": messages}).encode("utf-8"),
+                {"Content-Type": "application/json", "X-Dialogue-Token": token},
+            )
+
+        code, headers, body = send([first])
+        self.assertEqual(code, 200, body)
+        self.assertEqual(headers["X-Model-Calls"], "1")
+        token = headers["X-Dialogue-Token"]
+        reply = {"role": "user", "text": "Таганрог, до 5000 ₽"}
+        question = {"role": "assistant", "text": "Уточните город и бюджет"}
+        code, headers, body = send([first, question, reply], token)
+        self.assertEqual(code, 200, body)
+        self.assertEqual(headers["X-Model-Calls"], "0")
+        self.assertEqual(headers["X-Model-Reused"], "1")
+        self.assertEqual(len(self.gateway.requests), 1)
+        result = json.loads(body)
+        self.assertEqual(result["answer"]["status"], "ok")
+        self.assertTrue(result["items"])
+        self.assertTrue(all(item["category"] == "table" for item in result["items"]))
+
+        self.gateway.enqueue(200, envelope({"categories": ["lamp"]}))
+        code, headers, body = send([{"role": "user", "text": "Найди деревяшку на четырёх ножках"}, question, reply], token)
+        self.assertEqual(code, 200, body)
+        self.assertEqual(headers["X-Model-Calls"], "1")
+        self.assertEqual(len(self.gateway.requests), 2)
 
 
 if __name__ == "__main__":

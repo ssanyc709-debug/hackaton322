@@ -29,6 +29,7 @@ from app.nlp.product_intent import GENERIC_PRODUCT_WORDS, describes_product, ter
 
 _OPTION_WORDS = frozenset({"вариант", "варианта", "варианты", "вариантов", "варианте"})
 _PURPOSE_WORDS = frozenset({"для", "под", "совместим", "совместима", "совместимый"})
+_OWN_ATTRIBUTES = frozenset({"color", "colour", "material", "brand", "model", "цвет", "материал", "бренд", "модель"})
 _NON_MONEY_UNITS = frozenset({"мм", "mm", "шт", "штука", "штуки", "штук", "кг", "kg", "г", "л"})
 _PRICE_WORDS = frozenset({"цена", "ценой", "стоимость", "стоимостью"})
 _BUDGET_WORDS = MONEY_HINTS | {
@@ -41,7 +42,7 @@ _QUERY_FILLER = (FILLER_WORDS - {"не"}) | {
     "покажешь", "показывай", "посмотреть", "поищи", "ищем", "интересует", "лучше", "давай",
     "самовывоз", "город", "теперь", "поменяем", "ок", "спасибо", "подходит",
     "хорошо", "ага", "угу", "да", "ладно", "еще", "привет", "здравствуйте",
-    "благодарю", "понятно", "понял", "ясно", "все", "доступные", "г",
+    "благодарю", "понятно", "понял", "ясно", "все", "доступные", "г", "либо",
 }
 _FLEETING_VOWEL = re.compile(r"([бвгджзклмнпрстфхцчшщ])[ое]к$")
 
@@ -60,6 +61,10 @@ def _forms(word: str) -> frozenset[str]:
     if len(word) >= 5 and _FLEETING_VOWEL.search(word):
         forms.add(_FLEETING_VOWEL.sub(r"\1к", word))
     return frozenset(forms)
+
+
+def _city_key(words: Sequence[str]) -> tuple[str, ...]:
+    return tuple(stem(stem(word)) for word in words)
 
 
 def extract_all_strings(data: object) -> Iterator[str]:
@@ -84,6 +89,7 @@ class Product:
     city_id: str
     city_name: str
     search_texts: tuple[str, ...] = ()
+    own_attributes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,9 +117,13 @@ def _parse_product(raw: object, position: int) -> Product:
         raise CatalogError(f"товар #{position}: нужны непустые id, title/name и city_id/city")
     if type(price) is not int or price < 1:
         raise CatalogError(f"товар #{position}: price_rub/price должен быть целым числом > 0")
-    search_fields = [raw.get(key) for key in ("aliases", "keywords", "attributes")]
+    search_fields = [raw.get(key) for key in ("aliases", "keywords")]
     search_texts = tuple(extract_all_strings(search_fields))
-    return Product(listing_id, title.strip(), price, city_id.strip(), city_name.strip(), search_texts)
+    attributes = raw.get("attributes")
+    own = tuple(
+        value for key, value in attributes.items() if normalize_text(key) in _OWN_ATTRIBUTES and isinstance(value, str)
+    ) if isinstance(attributes, dict) else ()
+    return Product(listing_id, title.strip(), price, city_id.strip(), city_name.strip(), search_texts, own)
 
 
 class TextCatalog:
@@ -125,6 +135,7 @@ class TextCatalog:
             raise CatalogError("в каталоге повторяются id товаров")
         self.head_postings: dict[str, set[str]] = defaultdict(set)
         self.purpose_postings: dict[str, set[str]] = defaultdict(set)
+        self.name_scopes: dict[str, list[tuple[set[str], set[str]]]] = defaultdict(list)
         aliases: dict[tuple[str, ...], set[str]] = defaultdict(set)
         for city_id, words in (CITY_WORDS | UNSUPPORTED_CITY_WORDS).items():
             for word in (*words, city_id):
@@ -133,27 +144,34 @@ class TextCatalog:
             aliases[(form, "на", "дону")].add("rostov-na-donu")
         catalog_aliases: dict[tuple[str, ...], set[str]] = defaultdict(set)
         for product in products:
+            facts = {form for value in product.own_attributes for word in _terms(value) for form in _forms(word)}
             for phrase in (product.title, *product.search_texts):
-                postings = self.head_postings
+                head = set(facts)
+                purpose: set[str] = set()
+                scope = head
                 for position, word in enumerate(_terms(phrase)):
                     if position and word in _PURPOSE_WORDS:
-                        postings = self.purpose_postings
-                    for form in _forms(word):
-                        postings[form].add(product.id)
+                        scope = purpose
+                    scope.update(_forms(word))
+                self.name_scopes[product.id].append((head, purpose))
+                for form in head:
+                    self.head_postings[form].add(product.id)
+                for form in purpose:
+                    self.purpose_postings[form].add(product.id)
             catalog_aliases[_terms(product.city_id)].add(product.city_id)
             catalog_aliases[_terms(product.city_name)].add(product.city_id)
         catalog_stems: dict[tuple[str, ...], set[str]] = defaultdict(set)
         for alias, ids in catalog_aliases.items():
-            catalog_stems[tuple(stem(word) for word in alias)].update(ids)
+            catalog_stems[_city_key(alias)].update(ids)
         for alias in aliases:
-            ids = catalog_stems.get(tuple(stem(word) for word in alias))
+            ids = catalog_stems.get(_city_key(alias))
             if ids:
                 aliases[alias] = ids
         aliases.update(catalog_aliases)
         self.city_aliases = aliases
         self.city_forms: dict[tuple[str, ...], set[str]] = defaultdict(set)
         for alias, ids in aliases.items():
-            self.city_forms[tuple(stem(word) for word in alias)].update(ids)
+            self.city_forms[_city_key(alias)].update(ids)
         self.city_forms.update(catalog_stems)
         self.city_lengths = sorted({len(alias) for alias in aliases if alias}, reverse=True)
 
@@ -181,13 +199,21 @@ class TextCatalog:
             for i, word in enumerate(terms)
         ]
         smallest, *others = sorted(postings, key=len)
-        return smallest.intersection(*others)
+        candidates = smallest.intersection(*others)
+        head_terms = tuple(map(_forms, terms[:separator]))
+        purpose_terms = tuple(map(_forms, terms[separator:]))
+        return {
+            item_id for item_id in candidates
+            if any(all(forms & head for forms in head_terms) and all(forms & purpose for forms in purpose_terms)
+                   for head, purpose in self.name_scopes[item_id])
+        }
 
     def _city(self, tokens: tuple[str, ...]) -> tuple[str | None, set[int]]:
         """Находит последнее упоминание города и позиции кусочка с названием."""
-        city: str | None = None
+        selected: set[str] = set()
         positions: set[int] = set()
-        bases = tuple(stem(token) for token in tokens)
+        bases = _city_key(tokens)
+        previous_end = 0
         for start in range(len(tokens)):
             if start in positions:
                 continue
@@ -199,10 +225,14 @@ class TextCatalog:
                 if cities is None and (start == 0 or tokens[start - 1] in {"в", "во", "из"}):
                     cities = self.city_forms.get(bases[start:end])
                 if cities:
-                    city = next(iter(cities)) if len(cities) == 1 else None
                     positions.update(range(start, end))
+                    if {"или", "либо"}.intersection(tokens[previous_end:start]):
+                        selected.update(cities)
+                    else:
+                        selected = set(cities)
+                    previous_end = end
                     break
-        return city, positions
+        return (next(iter(selected)) if len(selected) == 1 else None), positions
 
     def parse_query(self, text: str) -> QueryStep:
         """Отделяет город, бюджет и число альтернатив от слов товара."""
@@ -302,6 +332,8 @@ class TextCatalog:
         if missing:
             return _clarify(missing)
 
+        if not ids:
+            return response.no_match("В каталоге нет совпадений по названию. Проверьте название товара.")
         matches = sorted(
             (self.products[item_id] for item_id in ids if self.products[item_id].city_id == city),
             key=lambda product: (product.price_rub, product.id),

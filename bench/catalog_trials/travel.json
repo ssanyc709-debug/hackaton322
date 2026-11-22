@@ -1,0 +1,10 @@
+[
+  {"id":"bottle-1","title":"Фляга походная","price_rub":380,"city":"Йошкар-Ола","attributes":{"material":"сталь","lid":{"material":"пластик"}}},
+  {"id":"bottle-2","title":"Фляга с карабином","price_rub":470,"city":"Йошкар-Ола","attributes":{"material":"пластик"}},
+  {"id":"thermos-1","title":"Термос вакуумный","price_rub":1200,"city":"Йошкар-Ола"},
+  {"id":"thermos-2","title":"Термос дорожный","price_rub":1480,"city":"Йошкар-Ола"},
+  {"id":"thermos-3","title":"Термос компактный","price_rub":890,"city":"Саранск"},
+  {"id":"lamp-1","title":"Фонарь налобный","price_rub":730,"city":"Йошкар-Ола"},
+  {"id":"lamp-2","title":"Фонарь ручной","price_rub":450,"city":"Йошкар-Ола"},
+  {"id":"mug-1","title":"Термокружка с крышкой","price_rub":620,"city":"Йошкар-Ола"}
+]

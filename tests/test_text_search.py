@@ -178,6 +178,21 @@ class TextSearchTest(unittest.TestCase):
         self.assertEqual(ids(index.answer(["Железная балка в Москве до 1000 ₽"])), ["x"])
         self.assertEqual(ids(index.answer(["Железная балка в t42 до 1000 ₽"])), ["x"])
 
+    def test_city_inflection_resolves_to_catalog_id(self) -> None:
+        self.write([{"id": "tula", "title": "Мольберт", "city_id": "local-1", "city_name": "Тула", "price": 900}])
+        index = TextCatalog.load(self.path)
+        self.assertEqual(ids(index.answer(["Мольберт в Туле до 1000 ₽"])), ["tula"])
+
+    def test_accessory_material_and_alias_do_not_combine_with_product_name(self) -> None:
+        self.write([
+            {"id": "steel", "title": "Термос стальной", "city": "Псков", "price": 900,
+             "aliases": ["Пластиковая крышка"], "attributes": {"крышка": {"материал": "пластиковая"}}},
+            {"id": "plastic", "title": "Термос", "city": "Псков", "price": 1100,
+             "attributes": {"material": "пластиковый"}},
+        ])
+        index = TextCatalog.load(self.path)
+        self.assertEqual(ids(index.answer(["Пластиковый термос в Пскове до 1500 ₽"])), ["plastic"])
+
     def test_hyphenated_city_is_removed_from_the_product_phrase(self) -> None:
         self.write([{**ROWS[0], "city": "rostov-na-donu"}])
         index = TextCatalog.load(self.path)

@@ -263,6 +263,14 @@ class SuccessTest(GatewayTestCase):
         resolver = make_resolver(self.config, self.deadline)
         self.assertEqual(resolver("Нужно что-нибудь для комнаты", Slots()), {"categories": []})
 
+    def test_resolver_strips_zero_padding_after_routing(self) -> None:
+        self.gateway.enqueue(200, envelope({"categories": ["table"]}))
+        resolver = make_resolver(self.config, self.deadline)
+        query = "0" * 900 + "найди то, на чём писать" + "0" * 900 + "ценой до 5000₽"
+        self.assertEqual(resolver(query, Slots()), {"categories": ["table"]})
+        self.assertEqual(self.gateway.body_json["messages"][-1]["content"],
+                         "найди то, на чём писать ценой до 5000₽")
+
 
 class ModelOutputTest(GatewayTestCase):
     """Формат ответа: JSON модели — строка, ошибки формата объясняются."""

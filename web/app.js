@@ -35,8 +35,8 @@ var EXAMPLES = [
 
 var state = {
   history: [], // [{role, text}] — отправляется целиком
-  cards: new Map(), // id → карточка товара из /api/listings
-  lastDocument: null, // последний ответ, чтобы перерисовать после загрузки карточек
+  cards: new Map(), // id → карточка из того же ответа, что и подбор
+  dialogueToken: "",
   busy: false,
 };
 
@@ -83,13 +83,15 @@ function serviceError(message) {
   return error;
 }
 
-/** POST /api/answer. Возвращает {document, metrics} или бросает ошибку. */
-async function askBackend(messages) {
+/** Возвращает подбор, карточки из того же снимка каталога и метрики. */
+async function askBackend(messages, dialogueToken) {
   var response;
+  var headers = { "Content-Type": "application/json", Accept: "application/json" };
+  if (dialogueToken) headers["X-Dialogue-Token"] = dialogueToken;
   try {
-    response = await fetchWithTimeout("/api/answer", {
+    response = await fetchWithTimeout("/api/answer?include=cards", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: headers,
       body: JSON.stringify({ messages: messages }),
     });
   } catch (error) {
@@ -107,7 +109,12 @@ async function askBackend(messages) {
     error.metrics = readMetrics(response);
     throw error;
   }
-  return { document: payload, metrics: readMetrics(response) };
+  return {
+    document: payload.answer,
+    items: payload.items,
+    dialogueToken: response.headers.get("X-Dialogue-Token") || "",
+    metrics: readMetrics(response),
+  };
 }
 
 function readMetrics(response) {
@@ -117,24 +124,8 @@ function readMetrics(response) {
     tokens: tokenHeader === null ? null : Number(tokenHeader),
     elapsedMs: Number(response.headers.get("X-Elapsed-Ms") || 0),
     modelUnavailable: response.headers.get("X-Model-Unavailable") === "1",
+    modelReused: response.headers.get("X-Model-Reused") === "1",
   };
-}
-
-/** GET /api/listings?ids=… — карточки товаров без поля description. */
-async function loadListings(ids) {
-  var unknown = ids.filter(function (id) {
-    return !state.cards.has(id);
-  });
-  if (!unknown.length) return;
-  var url = "/api/listings?ids=" + encodeURIComponent(unknown.join(","));
-  var response = await fetchWithTimeout(url, { headers: { Accept: "application/json" } });
-  if (!response.ok) return; // карточки не критичны: покажем хотя бы id
-  var payload = await response.json().catch(function () {
-    return null;
-  });
-  ((payload && payload.items) || []).forEach(function (item) {
-    state.cards.set(item.id, item);
-  });
 }
 
 // --- мелкие помощники -------------------------------------------------------
@@ -327,6 +318,8 @@ function showMetrics(metrics) {
   if (metrics.modelCalls) {
     var cost = metrics.tokens === null ? "расход токенов неизвестен" : metrics.tokens + " токенов";
     model = "вызов модели: да (" + cost + ")";
+  } else if (metrics.modelReused) {
+    model = "использован разбор модели из диалога (0 токенов)";
   } else if (metrics.modelUnavailable) {
     model = "вызов модели: нет (модель недоступна, разбор лексиконом)";
   } else {
@@ -369,24 +362,15 @@ async function submit() {
   setStatus("обрабатываю запрос…", false);
 
   try {
-    var result = await askBackend(state.history);
+    var result = await askBackend(state.history, state.dialogueToken);
     var document_ = result.document;
-    state.lastDocument = document_;
+    state.dialogueToken = result.dialogueToken;
+    state.cards = new Map(result.items.map(function (item) { return [item.id, item]; }));
     state.history.push({ role: "assistant", text: assistantHistoryText(document_) });
     showInPanel(renderDocument(document_));
     echoInChat(document_);
     showMetrics(result.metrics);
 
-    if (document_.status === "ok") {
-      var ids = [];
-      document_.options.forEach(function (option) {
-        ids = ids.concat(option.listing_ids || []);
-      });
-      // Карточки подтягиваем после ответа и перерисовываем панель: в документе
-      // контракта только id, названия и цены живут в каталоге.
-      await loadListings(ids);
-      showInPanel(renderDocument(state.lastDocument));
-    }
     setStatus("ответ получен", false);
   } catch (error) {
     // Неудачную реплику в историю не пишем: иначе следующая отправка сломает
@@ -424,7 +408,8 @@ function renderExamples() {
 
 function resetDialog() {
   state.history = [];
-  state.lastDocument = null;
+  state.dialogueToken = "";
+  state.cards.clear();
   els.chat.replaceChildren();
   els.answer.replaceChildren(el("p", "placeholder", PLACEHOLDER));
   els.metrics.hidden = true;

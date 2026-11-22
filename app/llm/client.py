@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from typing import Any, Callable, Mapping, Sequence
@@ -278,7 +279,7 @@ def make_resolver(
     def resolve(text: str, slots: Slots) -> dict[str, Any]:  # noqa: ARG001 — подпись Resolver
         return complete_fn(
             config,
-            [system_message, {"role": "user", "content": text}],
+            [system_message, {"role": "user", "content": prepare_user_text(text)}],
             deadline,
             schema=CATEGORY_SCHEMA,
             schema_name="buyer_categories",
@@ -287,6 +288,15 @@ def make_resolver(
 
     resolve.__doc__ = "Один вызов модели для одной реплики покупателя (§5)."
     return resolve
+
+
+_ZERO_PADDING = re.compile(r"(?<!\d)0{12,}(?!\d)")
+
+
+def prepare_user_text(text: str) -> str:
+    """Убирает длинные цепочки нулей из текста уже выбранного запроса к модели."""
+    cleaned, count = _ZERO_PADDING.subn(" ", text)
+    return (" ".join(cleaned.split()) or text) if count else text
 
 
 def redact(text: str, api_key: str) -> str:

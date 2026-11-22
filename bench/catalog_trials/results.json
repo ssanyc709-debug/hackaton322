@@ -1,0 +1,2500 @@
+{
+  "summary": {
+    "offline": {
+      "cases_passed": 11,
+      "cases_total": 28,
+      "turns_passed": 16,
+      "turns_total": 34,
+      "errors": 0,
+      "model_calls": 0,
+      "model_reuses": 0,
+      "tokens_reported": 0,
+      "called_turns_without_usage": 0,
+      "tokens_per_call_median": null,
+      "wall_ms_median_all": 178.45,
+      "wall_ms_median_local": 178.45,
+      "wall_ms_median_called": null
+    },
+    "on_demand": {
+      "cases_passed": 22,
+      "cases_total": 28,
+      "turns_passed": 28,
+      "turns_total": 34,
+      "errors": 0,
+      "model_calls": 13,
+      "model_reuses": 1,
+      "tokens_reported": 1322,
+      "called_turns_without_usage": 0,
+      "tokens_per_call_median": 95,
+      "wall_ms_median_all": 188.7,
+      "wall_ms_median_local": 181.6,
+      "wall_ms_median_called": 1992.6
+    }
+  },
+  "runs": {
+    "offline": [
+      {
+        "id": "coffee-exact",
+        "catalog": "coffee",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 188.9,
+            "backend_ms": 64,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "grinder-1"
+                  ],
+                  "total_rub": 1250,
+                  "explanation": "Кофемолка ручная жерновая — 1 250 ₽. Самовывоз: Вологда."
+                },
+                {
+                  "listing_ids": [
+                    "grinder-2"
+                  ],
+                  "total_rub": 1900,
+                  "explanation": "Кофемолка электрическая — 1 900 ₽. Самовывоз: Вологда."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "grinder-1",
+                "title": "Кофемолка ручная жерновая",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 1250
+              },
+              {
+                "id": "grinder-2",
+                "title": "Кофемолка электрическая",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 1900
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "coffee-beans",
+        "catalog": "coffee",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 177.5,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "no_match",
+              "message": "В каталоге нет совпадений по названию. Проверьте название товара."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "coffee-broad",
+        "catalog": "coffee",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 182.6,
+            "backend_ms": 60,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "no_match",
+              "message": "В каталоге нет совпадений по названию. Проверьте название товара."
+            },
+            "cards": []
+          },
+          {
+            "turn": 2,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 185.7,
+            "backend_ms": 58,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "coffee-1"
+                  ],
+                  "total_rub": 650,
+                  "explanation": "Кофе в зёрнах, Бразилия — 650 ₽. Самовывоз: Вологда."
+                },
+                {
+                  "listing_ids": [
+                    "coffee-2"
+                  ],
+                  "total_rub": 940,
+                  "explanation": "Кофе в зёрнах, Эфиопия — 940 ₽. Самовывоз: Вологда."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "coffee-1",
+                "title": "Кофе в зёрнах, Бразилия",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 650
+              },
+              {
+                "id": "coffee-2",
+                "title": "Кофе в зёрнах, Эфиопия",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 940
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "coffee-grind",
+        "catalog": "coffee",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 191.7,
+            "backend_ms": 66,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "budget_rub",
+                  "text": "Сколько рублей готовы потратить на один вариант?"
+                },
+                {
+                  "field": "city_id",
+                  "text": "В каком городе нужен товар?"
+                },
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          },
+          {
+            "turn": 2,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 186.1,
+            "backend_ms": 60,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "coffee-name-and-purpose",
+        "catalog": "coffee",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 175.9,
+            "backend_ms": 56,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "grinder-1"
+                  ],
+                  "total_rub": 1250,
+                  "explanation": "Кофемолка ручная жерновая — 1 250 ₽. Самовывоз: Вологда."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "grinder-1",
+                "title": "Кофемолка ручная жерновая",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 1250
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "coffee-multi-city",
+        "catalog": "coffee",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 176.3,
+            "backend_ms": 58,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "city_id",
+                  "text": "В каком городе нужен товар?"
+                }
+              ]
+            },
+            "cards": []
+          },
+          {
+            "turn": 2,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 189.4,
+            "backend_ms": 67,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "no_match",
+              "message": "В каталоге нет совпадений по названию. Проверьте название товара."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "opt-birds",
+        "catalog": "optics",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 185.9,
+            "backend_ms": 61,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "opt-tripod",
+        "catalog": "optics",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 175.2,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "opt-purpose",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 176.5,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "tripod-1"
+                  ],
+                  "total_rub": 790,
+                  "explanation": "Штатив настольный для экшен-камеры — 790 ₽. Самовывоз: Псков."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "tripod-1",
+                "title": "Штатив настольный для экшен-камеры",
+                "category": "",
+                "city_name": "Псков",
+                "price_rub": 790
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "opt-city-inflection",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 177.7,
+            "backend_ms": 56,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "bin-3"
+                  ],
+                  "total_rub": 900,
+                  "explanation": "Бинокль театральный — 900 ₽. Самовывоз: Комсомольск-на-Амуре."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "bin-3",
+                "title": "Бинокль театральный",
+                "category": "",
+                "city_name": "Комсомольск-на-Амуре",
+                "price_rub": 900
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "opt-cheapest",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 172.9,
+            "backend_ms": 55,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "no_match",
+              "message": "В выбранном городе подходящие товары стоят от 1 450 ₽. Увеличьте бюджет, чтобы увидеть варианты."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "opt-number-in-name",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 177.5,
+            "backend_ms": 58,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "camera-1"
+                  ],
+                  "total_rub": 2100,
+                  "explanation": "Экшен-камера 4K — 2 100 ₽. Самовывоз: Псков."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "camera-1",
+                "title": "Экшен-камера 4K",
+                "category": "",
+                "city_name": "Псков",
+                "price_rub": 2100
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "tools-typo",
+        "catalog": "workshop",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 194.9,
+            "backend_ms": 66,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "tools-change-city-budget",
+        "catalog": "workshop",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 174.4,
+            "backend_ms": 55,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "clamp-1"
+                  ],
+                  "total_rub": 620,
+                  "explanation": "Струбцина винтовая 150 мм — 620 ₽. Самовывоз: Шуя."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "clamp-1",
+                "title": "Струбцина винтовая 150 мм",
+                "category": "",
+                "city_name": "Шуя",
+                "price_rub": 620
+              }
+            ]
+          },
+          {
+            "turn": 2,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 189.0,
+            "backend_ms": 58,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "tools-unit",
+        "catalog": "workshop",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 176.4,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "budget_rub",
+                  "text": "Сколько рублей готовы потратить на один вариант?"
+                }
+              ]
+            },
+            "cards": []
+          },
+          {
+            "turn": 2,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 179.6,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "clamp-1"
+                  ],
+                  "total_rub": 620,
+                  "explanation": "Струбцина винтовая 150 мм — 620 ₽. Самовывоз: Шуя."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "clamp-1",
+                "title": "Струбцина винтовая 150 мм",
+                "category": "",
+                "city_name": "Шуя",
+                "price_rub": 620
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "tools-to-hold",
+        "catalog": "workshop",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 178.2,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "tools-measure",
+        "catalog": "workshop",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 178.7,
+            "backend_ms": 58,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "tools-unknown",
+        "catalog": "workshop",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 173.2,
+            "backend_ms": 54,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "no_match",
+              "message": "В каталоге нет совпадений по названию. Проверьте название товара."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "trip-own-material",
+        "catalog": "travel",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 197.3,
+            "backend_ms": 70,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "no_match",
+              "message": "В каталоге нет совпадений по названию. Проверьте название товара."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "trip-drink",
+        "catalog": "travel",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 180.1,
+            "backend_ms": 60,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "trip-hands-free",
+        "catalog": "travel",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 178.7,
+            "backend_ms": 58,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "trip-switch-kind",
+        "catalog": "travel",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 177.9,
+            "backend_ms": 56,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "bottle-1"
+                  ],
+                  "total_rub": 380,
+                  "explanation": "Фляга походная — 380 ₽. Самовывоз: Йошкар-Ола."
+                },
+                {
+                  "listing_ids": [
+                    "bottle-2"
+                  ],
+                  "total_rub": 470,
+                  "explanation": "Фляга с карабином — 470 ₽. Самовывоз: Йошкар-Ола."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "bottle-1",
+                "title": "Фляга походная",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 380
+              },
+              {
+                "id": "bottle-2",
+                "title": "Фляга с карабином",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 470
+              }
+            ]
+          },
+          {
+            "turn": 2,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 174.9,
+            "backend_ms": 56,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "thermos-1"
+                  ],
+                  "total_rub": 1200,
+                  "explanation": "Термос вакуумный — 1 200 ₽. Самовывоз: Йошкар-Ола."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "thermos-1",
+                "title": "Термос вакуумный",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 1200
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "trip-local-miss",
+        "catalog": "travel",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 173.0,
+            "backend_ms": 54,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "no_match",
+              "message": "В выбранном городе нет товара с таким названием. Уточните название или выберите другой город."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "trip-unpadded",
+        "catalog": "travel",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 174.8,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "trip-padding",
+        "catalog": "travel",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 177.0,
+            "backend_ms": 59,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "stock-mixed",
+        "catalog": "stock",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 195.9,
+            "backend_ms": 74,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какие товары подобрать? Поддерживаются: стол, кресло, лампа."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "stock-ambiguous",
+        "catalog": "stock",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 184.7,
+            "backend_ms": 65,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какие товары подобрать? Поддерживаются: стол, кресло, лампа."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "stock-padded",
+        "catalog": "stock",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 186.2,
+            "backend_ms": 68,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какие товары подобрать? Поддерживаются: стол, кресло, лампа."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "opt-birds-repeat-1",
+        "catalog": "optics",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 185.5,
+            "backend_ms": 63,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "opt-birds-repeat-2",
+        "catalog": "optics",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 189.4,
+            "backend_ms": 65,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": true,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      }
+    ],
+    "on_demand": [
+      {
+        "id": "coffee-exact",
+        "catalog": "coffee",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 177.8,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "grinder-1"
+                  ],
+                  "total_rub": 1250,
+                  "explanation": "Кофемолка ручная жерновая — 1 250 ₽. Самовывоз: Вологда."
+                },
+                {
+                  "listing_ids": [
+                    "grinder-2"
+                  ],
+                  "total_rub": 1900,
+                  "explanation": "Кофемолка электрическая — 1 900 ₽. Самовывоз: Вологда."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "grinder-1",
+                "title": "Кофемолка ручная жерновая",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 1250
+              },
+              {
+                "id": "grinder-2",
+                "title": "Кофемолка электрическая",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 1900
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "coffee-beans",
+        "catalog": "coffee",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 186.7,
+            "backend_ms": 56,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "no_match",
+              "message": "В каталоге нет совпадений по названию. Проверьте название товара."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "coffee-broad",
+        "catalog": "coffee",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 186.7,
+            "backend_ms": 61,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "no_match",
+              "message": "В каталоге нет совпадений по названию. Проверьте название товара."
+            },
+            "cards": []
+          },
+          {
+            "turn": 2,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 192.1,
+            "backend_ms": 62,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "coffee-1"
+                  ],
+                  "total_rub": 650,
+                  "explanation": "Кофе в зёрнах, Бразилия — 650 ₽. Самовывоз: Вологда."
+                },
+                {
+                  "listing_ids": [
+                    "coffee-2"
+                  ],
+                  "total_rub": 940,
+                  "explanation": "Кофе в зёрнах, Эфиопия — 940 ₽. Самовывоз: Вологда."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "coffee-1",
+                "title": "Кофе в зёрнах, Бразилия",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 650
+              },
+              {
+                "id": "coffee-2",
+                "title": "Кофе в зёрнах, Эфиопия",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 940
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "coffee-grind",
+        "catalog": "coffee",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 1992.6,
+            "backend_ms": 1866,
+            "model_calls": 1,
+            "tokens": 82,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "budget_rub",
+                  "text": "Сколько рублей готовы потратить на один вариант?"
+                },
+                {
+                  "field": "city_id",
+                  "text": "В каком городе нужен товар?"
+                }
+              ]
+            },
+            "cards": []
+          },
+          {
+            "turn": 2,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 196.9,
+            "backend_ms": 67,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": true,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "grinder-1"
+                  ],
+                  "total_rub": 1250,
+                  "explanation": "Кофемолка ручная жерновая — 1 250 ₽. Самовывоз: Вологда."
+                },
+                {
+                  "listing_ids": [
+                    "grinder-2"
+                  ],
+                  "total_rub": 1900,
+                  "explanation": "Кофемолка электрическая — 1 900 ₽. Самовывоз: Вологда."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "grinder-1",
+                "title": "Кофемолка ручная жерновая",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 1250
+              },
+              {
+                "id": "grinder-2",
+                "title": "Кофемолка электрическая",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 1900
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "coffee-name-and-purpose",
+        "catalog": "coffee",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 172.9,
+            "backend_ms": 55,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "grinder-1"
+                  ],
+                  "total_rub": 1250,
+                  "explanation": "Кофемолка ручная жерновая — 1 250 ₽. Самовывоз: Вологда."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "grinder-1",
+                "title": "Кофемолка ручная жерновая",
+                "category": "",
+                "city_name": "Вологда",
+                "price_rub": 1250
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "coffee-multi-city",
+        "catalog": "coffee",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 183.1,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "city_id",
+                  "text": "В каком городе нужен товар?"
+                }
+              ]
+            },
+            "cards": []
+          },
+          {
+            "turn": 2,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 170.3,
+            "backend_ms": 55,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "no_match",
+              "message": "В каталоге нет совпадений по названию. Проверьте название товара."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "opt-birds",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 8759.9,
+            "backend_ms": 8637,
+            "model_calls": 1,
+            "tokens": 95,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "bin-1"
+                  ],
+                  "total_rub": 1450,
+                  "explanation": "Бинокль складной — 1 450 ₽. Самовывоз: Псков."
+                },
+                {
+                  "listing_ids": [
+                    "bin-2"
+                  ],
+                  "total_rub": 1800,
+                  "explanation": "Бинокль туристический — 1 800 ₽. Самовывоз: Псков."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "bin-1",
+                "title": "Бинокль складной",
+                "category": "",
+                "city_name": "Псков",
+                "price_rub": 1450
+              },
+              {
+                "id": "bin-2",
+                "title": "Бинокль туристический",
+                "category": "",
+                "city_name": "Псков",
+                "price_rub": 1800
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "opt-tripod",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 3067.4,
+            "backend_ms": 2940,
+            "model_calls": 1,
+            "tokens": 94,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "tripod-1"
+                  ],
+                  "total_rub": 790,
+                  "explanation": "Штатив настольный для экшен-камеры — 790 ₽. Самовывоз: Псков."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "tripod-1",
+                "title": "Штатив настольный для экшен-камеры",
+                "category": "",
+                "city_name": "Псков",
+                "price_rub": 790
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "opt-purpose",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 177.4,
+            "backend_ms": 58,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "tripod-1"
+                  ],
+                  "total_rub": 790,
+                  "explanation": "Штатив настольный для экшен-камеры — 790 ₽. Самовывоз: Псков."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "tripod-1",
+                "title": "Штатив настольный для экшен-камеры",
+                "category": "",
+                "city_name": "Псков",
+                "price_rub": 790
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "opt-city-inflection",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 187.1,
+            "backend_ms": 63,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "bin-3"
+                  ],
+                  "total_rub": 900,
+                  "explanation": "Бинокль театральный — 900 ₽. Самовывоз: Комсомольск-на-Амуре."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "bin-3",
+                "title": "Бинокль театральный",
+                "category": "",
+                "city_name": "Комсомольск-на-Амуре",
+                "price_rub": 900
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "opt-cheapest",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 172.4,
+            "backend_ms": 58,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "no_match",
+              "message": "В выбранном городе подходящие товары стоят от 1 450 ₽. Увеличьте бюджет, чтобы увидеть варианты."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "opt-number-in-name",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 186.0,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "camera-1"
+                  ],
+                  "total_rub": 2100,
+                  "explanation": "Экшен-камера 4K — 2 100 ₽. Самовывоз: Псков."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "camera-1",
+                "title": "Экшен-камера 4K",
+                "category": "",
+                "city_name": "Псков",
+                "price_rub": 2100
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "tools-typo",
+        "catalog": "workshop",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 1432.1,
+            "backend_ms": 1298,
+            "model_calls": 1,
+            "tokens": 88,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "clamp-1"
+                  ],
+                  "total_rub": 620,
+                  "explanation": "Струбцина винтовая 150 мм — 620 ₽. Самовывоз: Шуя."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "clamp-1",
+                "title": "Струбцина винтовая 150 мм",
+                "category": "",
+                "city_name": "Шуя",
+                "price_rub": 620
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "tools-change-city-budget",
+        "catalog": "workshop",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 182.3,
+            "backend_ms": 54,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "clamp-1"
+                  ],
+                  "total_rub": 620,
+                  "explanation": "Струбцина винтовая 150 мм — 620 ₽. Самовывоз: Шуя."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "clamp-1",
+                "title": "Струбцина винтовая 150 мм",
+                "category": "",
+                "city_name": "Шуя",
+                "price_rub": 620
+              }
+            ]
+          },
+          {
+            "turn": 2,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 176.1,
+            "backend_ms": 54,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "tools-unit",
+        "catalog": "workshop",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 174.5,
+            "backend_ms": 55,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "budget_rub",
+                  "text": "Сколько рублей готовы потратить на один вариант?"
+                }
+              ]
+            },
+            "cards": []
+          },
+          {
+            "turn": 2,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 194.9,
+            "backend_ms": 55,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "clamp-1"
+                  ],
+                  "total_rub": 620,
+                  "explanation": "Струбцина винтовая 150 мм — 620 ₽. Самовывоз: Шуя."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "clamp-1",
+                "title": "Струбцина винтовая 150 мм",
+                "category": "",
+                "city_name": "Шуя",
+                "price_rub": 620
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "tools-to-hold",
+        "catalog": "workshop",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 2302.3,
+            "backend_ms": 2175,
+            "model_calls": 1,
+            "tokens": 99,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "tools-measure",
+        "catalog": "workshop",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 1783.1,
+            "backend_ms": 1654,
+            "model_calls": 1,
+            "tokens": 96,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "caliper-2"
+                  ],
+                  "total_rub": 790,
+                  "explanation": "Штангенциркуль механический — 790 ₽. Самовывоз: Шуя."
+                },
+                {
+                  "listing_ids": [
+                    "caliper-1"
+                  ],
+                  "total_rub": 1100,
+                  "explanation": "Штангенциркуль цифровой — 1 100 ₽. Самовывоз: Шуя."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "caliper-2",
+                "title": "Штангенциркуль механический",
+                "category": "",
+                "city_name": "Шуя",
+                "price_rub": 790
+              },
+              {
+                "id": "caliper-1",
+                "title": "Штангенциркуль цифровой",
+                "category": "",
+                "city_name": "Шуя",
+                "price_rub": 1100
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "tools-unknown",
+        "catalog": "workshop",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 171.9,
+            "backend_ms": 53,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "no_match",
+              "message": "В каталоге нет совпадений по названию. Проверьте название товара."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "trip-own-material",
+        "catalog": "travel",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 181.6,
+            "backend_ms": 57,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "no_match",
+              "message": "В каталоге нет совпадений по названию. Проверьте название товара."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "trip-drink",
+        "catalog": "travel",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 1331.1,
+            "backend_ms": 1205,
+            "model_calls": 1,
+            "tokens": 93,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "thermos-1"
+                  ],
+                  "total_rub": 1200,
+                  "explanation": "Термос вакуумный — 1 200 ₽. Самовывоз: Йошкар-Ола."
+                },
+                {
+                  "listing_ids": [
+                    "thermos-2"
+                  ],
+                  "total_rub": 1480,
+                  "explanation": "Термос дорожный — 1 480 ₽. Самовывоз: Йошкар-Ола."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "thermos-1",
+                "title": "Термос вакуумный",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 1200
+              },
+              {
+                "id": "thermos-2",
+                "title": "Термос дорожный",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 1480
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "trip-hands-free",
+        "catalog": "travel",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 1556.7,
+            "backend_ms": 1433,
+            "model_calls": 1,
+            "tokens": 100,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "lamp-1"
+                  ],
+                  "total_rub": 730,
+                  "explanation": "Фонарь налобный — 730 ₽. Самовывоз: Йошкар-Ола."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "lamp-1",
+                "title": "Фонарь налобный",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 730
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "trip-switch-kind",
+        "catalog": "travel",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 190.3,
+            "backend_ms": 66,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "bottle-1"
+                  ],
+                  "total_rub": 380,
+                  "explanation": "Фляга походная — 380 ₽. Самовывоз: Йошкар-Ола."
+                },
+                {
+                  "listing_ids": [
+                    "bottle-2"
+                  ],
+                  "total_rub": 470,
+                  "explanation": "Фляга с карабином — 470 ₽. Самовывоз: Йошкар-Ола."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "bottle-1",
+                "title": "Фляга походная",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 380
+              },
+              {
+                "id": "bottle-2",
+                "title": "Фляга с карабином",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 470
+              }
+            ]
+          },
+          {
+            "turn": 2,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 171.8,
+            "backend_ms": 55,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "thermos-1"
+                  ],
+                  "total_rub": 1200,
+                  "explanation": "Термос вакуумный — 1 200 ₽. Самовывоз: Йошкар-Ола."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "thermos-1",
+                "title": "Термос вакуумный",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 1200
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "trip-local-miss",
+        "catalog": "travel",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 173.0,
+            "backend_ms": 55,
+            "model_calls": 0,
+            "tokens": 0,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "no_match",
+              "message": "В выбранном городе нет товара с таким названием. Уточните название или выберите другой город."
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "trip-unpadded",
+        "catalog": "travel",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 3947.0,
+            "backend_ms": 3824,
+            "model_calls": 1,
+            "tokens": 94,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "lamp-1"
+                  ],
+                  "total_rub": 730,
+                  "explanation": "Фонарь налобный — 730 ₽. Самовывоз: Йошкар-Ола."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "lamp-1",
+                "title": "Фонарь налобный",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 730
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "trip-padding",
+        "catalog": "travel",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 3031.7,
+            "backend_ms": 2902,
+            "model_calls": 1,
+            "tokens": 94,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "lamp-1"
+                  ],
+                  "total_rub": 730,
+                  "explanation": "Фонарь налобный — 730 ₽. Самовывоз: Йошкар-Ола."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "lamp-1",
+                "title": "Фонарь налобный",
+                "category": "",
+                "city_name": "Йошкар-Ола",
+                "price_rub": 730
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "stock-mixed",
+        "catalog": "stock",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 8542.8,
+            "backend_ms": 8421,
+            "model_calls": 1,
+            "tokens": 136,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "demo-1-1-11",
+                    "demo-1-3-04"
+                  ],
+                  "total_rub": 3000,
+                  "explanation": "Стол, ширина не указана, за 2 500 ₽; Лампа с температурой 5000 K за 500 ₽. Итого 3 000 ₽ из 6 000 ₽."
+                },
+                {
+                  "listing_ids": [
+                    "demo-1-1-10",
+                    "demo-1-3-09"
+                  ],
+                  "total_rub": 3300,
+                  "explanation": "Стол шириной 100 см за 2 700 ₽; Лампа с температурой 5000 K за 600 ₽. Итого 3 300 ₽ из 6 000 ₽."
+                },
+                {
+                  "listing_ids": [
+                    "demo-1-1-04",
+                    "demo-1-3-01"
+                  ],
+                  "total_rub": 3850,
+                  "explanation": "Стол шириной 100 см за 3 200 ₽; Лампа, температура не указана, за 650 ₽. Итого 3 850 ₽ из 6 000 ₽."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "demo-1-1-11",
+                "title": "Офисный стол серый",
+                "category": "table",
+                "city_name": "Таганрог",
+                "price_rub": 2500
+              },
+              {
+                "id": "demo-1-3-04",
+                "title": "Светодиодная лампа с USB",
+                "category": "lamp",
+                "city_name": "Таганрог",
+                "price_rub": 500
+              },
+              {
+                "id": "demo-1-1-10",
+                "title": "Небольшой стол без тумбы",
+                "category": "table",
+                "city_name": "Таганрог",
+                "price_rub": 2700
+              },
+              {
+                "id": "demo-1-3-09",
+                "title": "Лампа с круглой подставкой",
+                "category": "lamp",
+                "city_name": "Таганрог",
+                "price_rub": 600
+              },
+              {
+                "id": "demo-1-1-04",
+                "title": "Стол на четырёх ножках, б/у",
+                "category": "table",
+                "city_name": "Таганрог",
+                "price_rub": 3200
+              },
+              {
+                "id": "demo-1-3-01",
+                "title": "Лампа настольная на прищепке",
+                "category": "lamp",
+                "city_name": "Таганрог",
+                "price_rub": 650
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "stock-ambiguous",
+        "catalog": "stock",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 1358.8,
+            "backend_ms": 1240,
+            "model_calls": 1,
+            "tokens": 124,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какие товары подобрать? Поддерживаются: стол, кресло, лампа."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      },
+      {
+        "id": "stock-padded",
+        "catalog": "stock",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 1447.4,
+            "backend_ms": 1312,
+            "model_calls": 1,
+            "tokens": 127,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "demo-1-3-04"
+                  ],
+                  "total_rub": 500,
+                  "explanation": "Лампа с температурой 5000 K за 500 ₽. Итого 500 ₽ из 4 000 ₽."
+                },
+                {
+                  "listing_ids": [
+                    "demo-1-3-09"
+                  ],
+                  "total_rub": 600,
+                  "explanation": "Лампа с температурой 5000 K за 600 ₽. Итого 600 ₽ из 4 000 ₽."
+                },
+                {
+                  "listing_ids": [
+                    "demo-1-3-01"
+                  ],
+                  "total_rub": 650,
+                  "explanation": "Лампа, температура не указана, за 650 ₽. Итого 650 ₽ из 4 000 ₽."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "demo-1-3-04",
+                "title": "Светодиодная лампа с USB",
+                "category": "lamp",
+                "city_name": "Таганрог",
+                "price_rub": 500
+              },
+              {
+                "id": "demo-1-3-09",
+                "title": "Лампа с круглой подставкой",
+                "category": "lamp",
+                "city_name": "Таганрог",
+                "price_rub": 600
+              },
+              {
+                "id": "demo-1-3-01",
+                "title": "Лампа настольная на прищепке",
+                "category": "lamp",
+                "city_name": "Таганрог",
+                "price_rub": 650
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "opt-birds-repeat-1",
+        "catalog": "optics",
+        "pass": true,
+        "results": [
+          {
+            "turn": 1,
+            "pass": true,
+            "http_status": 200,
+            "wall_ms": 2876.9,
+            "backend_ms": 2759,
+            "model_calls": 1,
+            "tokens": 95,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "ok",
+              "options": [
+                {
+                  "listing_ids": [
+                    "bin-1"
+                  ],
+                  "total_rub": 1450,
+                  "explanation": "Бинокль складной — 1 450 ₽. Самовывоз: Псков."
+                },
+                {
+                  "listing_ids": [
+                    "bin-2"
+                  ],
+                  "total_rub": 1800,
+                  "explanation": "Бинокль туристический — 1 800 ₽. Самовывоз: Псков."
+                }
+              ]
+            },
+            "cards": [
+              {
+                "id": "bin-1",
+                "title": "Бинокль складной",
+                "category": "",
+                "city_name": "Псков",
+                "price_rub": 1450
+              },
+              {
+                "id": "bin-2",
+                "title": "Бинокль туристический",
+                "category": "",
+                "city_name": "Псков",
+                "price_rub": 1800
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "opt-birds-repeat-2",
+        "catalog": "optics",
+        "pass": false,
+        "results": [
+          {
+            "turn": 1,
+            "pass": false,
+            "http_status": 200,
+            "wall_ms": 1480.7,
+            "backend_ms": 1354,
+            "model_calls": 1,
+            "tokens": 95,
+            "model_reused": false,
+            "model_unavailable": false,
+            "answer": {
+              "status": "clarify",
+              "questions": [
+                {
+                  "field": "categories",
+                  "text": "Какой товар ищете? Укажите название и важные слова, например «железная решётка»."
+                }
+              ]
+            },
+            "cards": []
+          }
+        ]
+      }
+    ]
+  }
+}
