@@ -22,11 +22,14 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import re
 import sys
 import time
-from typing import Any, Callable, Mapping, Sequence
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from app.config import (
     LLM_CALL_TIMEOUT_SECONDS,
@@ -237,6 +240,52 @@ def complete(
     url = f"{config.base_url}/chat/completions"
     headers = _headers(config)
 
+    with _web_model_slot(deadline):
+        started = time.monotonic()
+        try:
+            envelope = _request_completion(url, payload, headers, config.api_key, deadline, sleep)
+        finally:
+            elapsed = round((time.monotonic() - started) * 1000)
+            print(f"{_LOG_PREFIX} модель: шлюз {elapsed} мс", file=sys.stderr, flush=True)
+    _log_usage(envelope)
+    return _extraction_content(envelope, sanitize or _sanitize_slots)
+
+
+@contextmanager
+def _web_model_slot(deadline: float) -> Iterator[None]:
+    """Сериализует генерации дочерних процессов одного веб-сервера."""
+    path = os.environ.get("ASSISTANT_WEB_MODEL_LOCK")
+    if not path:
+        yield
+        return
+
+    with open(path, "r+b") as lock:
+        while True:
+            _timeout_left(deadline)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                    raise
+                time.sleep(0.05)
+            else:
+                break
+        # ОС отпускает блокировку при закрытии файла или завершении процесса.
+        yield
+
+
+def _request_completion(
+    url: str, payload: bytes, headers: Mapping[str, str], api_key: str,
+    deadline: float, sleep: Callable[[float], None],
+) -> dict[str, Any]:
     attempts = 0
     while True:
         attempts += 1
@@ -246,11 +295,9 @@ def complete(
         status, response_headers, body = _http_post(url, payload, headers, timeout)
 
         if status == 200:
-            envelope = _parse_envelope(body, config.api_key)
-            _log_usage(envelope)
-            return _extraction_content(envelope, sanitize or _sanitize_slots)
+            return _parse_envelope(body, api_key)
 
-        error = _error_from_response(status, body, config.api_key, attempts)
+        error = _error_from_response(status, body, api_key, attempts)
         if status == 429 and attempts <= LLM_RATE_LIMIT_MAX_RETRIES:
             pause = _retry_after(response_headers)
             remaining = deadline - time.monotonic()

@@ -38,6 +38,7 @@ if not __package__:
     sys.path.insert(0, str(ROOT))  # запуск напрямую через python web/serve.py
 
 from app.catalog import CatalogError, load_json_data, parse_catalog_source
+from app.catalog.text_search import TextCatalog, is_text_catalog
 from app.llm.dialogue import CURRENT_RESULT, PREVIOUS_RESULT
 
 #: Белый список статики: имя файла → Content-Type. Путь из URL никогда не
@@ -85,11 +86,6 @@ class BodyError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
-
-#: Один вызов бэкенда за раз: у шлюза модели лимит 20 запросов в минуту,
-#: и два одновременных клика не должны порождать два вызова.
-BACKEND_LOCK = threading.Lock()
-
 
 def log(message: str) -> None:
     """Логи сервера идут только в stderr, в браузер не попадают."""
@@ -217,7 +213,7 @@ class Catalog:
                 continue
             enriched = dict(card)
             enriched["category_name"] = categories.get(card["category"], card["category"])
-            enriched["city_name"] = cities.get(card["city_id"], card["city_name"] or card["city_id"])
+            enriched["city_name"] = card["city_name"] or cities.get(card["city_id"], card["city_id"])
             items.append(enriched)
         return items, missing
 
@@ -253,6 +249,7 @@ TOKENS_PATTERN = re.compile(r"\[buyer-assistant\] модель: prompt=(?:\d+|-)
 MODEL_REQUEST_LOG = "[buyer-assistant] модель: запрос к шлюзу"
 #: Итоговая строка ядра: ``готово: status=ok за 12 мс, всего 34 мс`` (app/main.py).
 ELAPSED_PATTERN = re.compile(r"всего\s+(\d+)\s+мс")
+MODEL_ELAPSED_PATTERN = re.compile(r"\[buyer-assistant\] модель: шлюз (\d+) мс")
 NO_MODEL_MARKER = "модель: недоступна"
 
 
@@ -273,10 +270,12 @@ def backend_metrics(stderr: bytes) -> dict[str, Any]:
     usages = [match for line in lines if (match := TOKENS_PATTERN.fullmatch(line))]
     tokens = sum(int(match.group(1)) for match in usages) if len(usages) == calls else None
     elapsed_match = ELAPSED_PATTERN.search(text)
+    model_times = [int(match.group(1)) for line in lines if (match := MODEL_ELAPSED_PATTERN.fullmatch(line))]
     return {
         "model_calls": calls,
         "tokens": tokens,
         "elapsed_ms": int(elapsed_match.group(1)) if elapsed_match else 0,
+        "model_elapsed_ms": sum(model_times) if calls and len(model_times) == calls else None,
         "model_unavailable": NO_MODEL_MARKER in text,
     }
 
@@ -308,15 +307,14 @@ def call_backend(
     if dialogue_analysis_dir is not None:
         command.extend(("--dialogue-analysis-dir", str(dialogue_analysis_dir)))
     try:
-        with BACKEND_LOCK:
-            completed = subprocess.run(
-                command,
-                input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                capture_output=True,
-                cwd=str(ROOT),
-                timeout=BACKEND_TIMEOUT_SECONDS,
-                env=env,
-            )
+        completed = subprocess.run(
+            command,
+            input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            capture_output=True,
+            cwd=str(ROOT),
+            timeout=BACKEND_TIMEOUT_SECONDS,
+            env=env,
+        )
     except subprocess.TimeoutExpired:
         return 504, {"error": f"бэкенд не ответил за {BACKEND_TIMEOUT_SECONDS} с"}, {}
     except OSError as exc:
@@ -469,6 +467,31 @@ class Api:
             return 500, {"error": str(exc)}
         return 200, {"total": len(items), "items": items, "missing": missing}
 
+    def examples(self) -> tuple[int, dict[str, Any]]:
+        """Составляет примеры из актуальных названий, городов и цен."""
+        try:
+            raw = load_json_data(self.catalog_path)
+            if not self.text_search and not is_text_catalog(raw):
+                return 200, {"kind": "furniture"}
+            index = TextCatalog.from_document(raw)
+        except CatalogError as exc:
+            return 502, {"error": str(exc)}
+
+        examples: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for product in index.products.values():
+            key = (product.title, product.city_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            price = f"{product.price_rub:,}".replace(",", " ")
+            text = f"{product.title}. {product.city_name}, до {price} ₽"
+            if index.answer([text])["status"] == "ok":
+                examples.append({"text": text})
+            if len(examples) == 3:
+                break
+        return 200, {"kind": "catalog", "examples": examples}
+
     def answer(
         self, raw_body: bytes, *, include_cards: bool = False, dialogue_token: str = "",
     ) -> tuple[int, dict[str, Any], dict[str, Any]]:
@@ -520,7 +543,7 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
             parts = urlsplit(self.path)
             path = parts.path
             if path != "/api/answer":
-                if path == "/api/listings" or static_name(path) in STATIC_FILES:
+                if path in {"/api/listings", "/api/examples"} or static_name(path) in STATIC_FILES:
                     self._allowed("POST", "GET, HEAD")
                 elif path.startswith("/api/"):
                     self._json(404, {"error": f"неизвестный эндпоинт {path}"})
@@ -549,6 +572,9 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
             parts = urlsplit(self.path)
             path = parts.path
             try:
+                if path == "/api/examples":
+                    self._json(*api.examples(), head=head)
+                    return
                 if path == "/api/listings":
                     self._json(*api.listings(parse_qs(parts.query, keep_blank_values=True)), head=head)
                     return
@@ -635,6 +661,8 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
             }
             if metrics.get("tokens") is not None:
                 headers["X-Model-Tokens"] = str(metrics["tokens"])
+            if metrics.get("model_elapsed_ms") is not None:
+                headers["X-Model-Elapsed-Ms"] = str(metrics["model_elapsed_ms"])
             if metrics.get("model_unavailable"):
                 headers["X-Model-Unavailable"] = "1"
             if metrics.get("dialogue_token"):
@@ -706,6 +734,23 @@ class WebServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def __init__(self, address: tuple[str, int], api: Api) -> None:
+        super().__init__(address, make_handler(api))
+        try:
+            self._model_lock_dir = tempfile.TemporaryDirectory(prefix="buyer-model-", ignore_cleanup_errors=True)
+            lock_file = Path(self._model_lock_dir.name) / "model.lock"
+            lock_file.write_bytes(b"\0")
+            api.env["ASSISTANT_WEB_MODEL_LOCK"] = str(lock_file)
+        except OSError:
+            self.server_close()
+            raise
+
+    def server_close(self) -> None:
+        super().server_close()
+        directory = getattr(self, "_model_lock_dir", None)
+        if directory is not None:
+            directory.cleanup()
+
     def handle_error(self, request: Any, client_address: Any) -> None:
         error = sys.exc_info()[1]
         if isinstance(error, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
@@ -716,7 +761,7 @@ class WebServer(ThreadingHTTPServer):
 
 def make_server(api: Api, host: str = "127.0.0.1", port: int = 8000) -> WebServer:
     """Создаёт сервер (не запускает): ``port=0`` выбирает свободный порт."""
-    return WebServer((host, port), make_handler(api), api)
+    return WebServer((host, port), api)
 
 
 def build_api(catalog_path: Path | str, offline: bool, *, text_search: bool = False) -> Api:

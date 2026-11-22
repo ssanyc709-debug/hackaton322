@@ -103,12 +103,19 @@ def merge_history(
         if step.categories_explicit:
             product_start = position + 1
             pending = PendingProduct(position, description, step.categories_removed) if description else None
-        elif (pending is None and active_resolver is not None and not model_can_help(state)
-              and (describes_product(text)
-                   or (step.mentioned <= {FIELD_CITY, FIELD_BUDGET} and requests_product(text)))
-              and has_product_context(text, step)):
-            product_start = position
-            state = replace(state, categories=(), categories_unknown=(), categories_explicit=False)
+        elif active_resolver is not None:
+            replacement = _EXPLICIT_REPLACEMENT.search(text) and not step.categories_additive
+            new_request = describes_product(text) or (
+                step.mentioned <= {FIELD_CITY, FIELD_BUDGET} and requests_product(text)
+            )
+            if not new_request or not has_product_context(text, step):
+                continue
+            if step.categories_additive and state.categories and pending is None:
+                pending = PendingProduct(position, text, ())
+            elif replacement or (pending is None and not model_can_help(state)):
+                product_start = position
+                pending = None
+                state = replace(state, categories=(), categories_unknown=(), categories_explicit=False)
     if pending is not None:
         if active_resolver is None:
             return replace(state, categories_uncertain=True)

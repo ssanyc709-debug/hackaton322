@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from statistics import median
+from statistics import mean, median
 from time import perf_counter
 
 from web.serve import ROOT, Api, Catalog
@@ -68,6 +68,7 @@ def run_case(api: Api, case: dict) -> list[dict]:
             "wall_ms": elapsed,
             "backend_ms": metrics.get("elapsed_ms") or None,
             "model_calls": metrics.get("model_calls", 0),
+            "model_elapsed_ms": metrics.get("model_elapsed_ms"),
             "tokens": metrics.get("tokens"),
             "model_reused": bool(metrics.get("model_reused")),
             "model_unavailable": bool(metrics.get("model_unavailable")),
@@ -100,6 +101,8 @@ def summarize(rows: list[dict]) -> dict:
         "wall_ms_median_all": median(turn["wall_ms"] for turn in turns),
         "wall_ms_median_local": median(turn["wall_ms"] for turn in local) if local else None,
         "wall_ms_median_called": median(turn["wall_ms"] for turn in calls) if calls else None,
+        "wall_ms_mean_called": round(mean(turn["wall_ms"] for turn in calls), 1) if calls else None,
+        "called_turns_over_10s": sum(turn["wall_ms"] > 10_000 for turn in calls),
     }
 
 

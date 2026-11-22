@@ -69,7 +69,11 @@ def read_catalog_document(source: Path | str) -> list[dict[str, object]]:
     и более 250 записей вызывают ошибку каталога.
     Вызывается из: app/main.py::main.
     """
-    document = load_json_data(source)
+    return validate_catalog_document(load_json_data(source), source)
+
+
+def validate_catalog_document(document: Any, source: Path | str) -> list[dict[str, object]]:
+    """Проверяет верхний уровень уже прочитанного каталога ТЗ."""
     label = f"каталог {source}" if isinstance(source, Path) else "каталог по URL"
 
     if not isinstance(document, list):

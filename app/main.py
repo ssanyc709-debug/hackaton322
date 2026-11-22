@@ -16,16 +16,16 @@ from pathlib import Path
 from typing import Sequence
 
 from app import config
-from app.catalog import CatalogError, parse_catalog_source, read_catalog_document
+from app.catalog import CatalogError, load_json_data, parse_catalog_source, validate_catalog_document
 from app.catalog.index import CatalogIndex, get_index
-from app.catalog.text_search import TextCatalog
+from app.catalog.text_search import TextCatalog, is_text_catalog
 from app.contract import response
 from app.contract.request import RequestError, parse_request
 from app.contract.response import ResponseError
 from app.jsonio import JsonError, loads_strict
 from app.llm.client import LlmError, make_resolver
 from app.llm.dialogue import DialogueAnalysis
-from app.llm.product import make_product_resolver
+from app.llm.product import make_preference_checker, make_product_resolver
 from app.nlp.cache import LexiconCache
 from app.pipeline import answer
 from app.prompt_safety import audit_catalog
@@ -104,10 +104,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     stage = time.monotonic()
     try:
-        if args.text_search:
-            index = TextCatalog.load(catalog_source)
+        raw_catalog = load_json_data(catalog_source)
+        if args.text_search or is_text_catalog(raw_catalog):
+            index = TextCatalog.from_document(raw_catalog)
         else:
-            catalog = read_catalog_document(catalog_source)
+            catalog = validate_catalog_document(raw_catalog, catalog_source)
             index = get_index(catalog, cache_dir=settings.cache_dir)
     except CatalogError as exc:
         log(f"каталог: {exc}")
@@ -156,9 +157,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         analysis = DialogueAnalysis(args.dialogue_analysis_dir) if args.dialogue_analysis_dir else None
         if isinstance(index, TextCatalog):
             product_resolver = make_product_resolver(settings.llm, deadline) if settings.llm_available else None
-            if product_resolver is not None and analysis is not None:
-                product_resolver = analysis.wrap(product_resolver)
-            document = index.answer(request.user_texts, resolver=product_resolver)
+            preference_checker = make_preference_checker(settings.llm, deadline) if settings.llm_available else None
+            if analysis is not None:
+                if product_resolver is not None:
+                    product_resolver = analysis.wrap(product_resolver)
+                if preference_checker is not None:
+                    preference_checker = analysis.wrap(preference_checker)
+            document = index.answer(request.user_texts, resolver=product_resolver, preference_checker=preference_checker)
         else:
             resolver = make_resolver(settings.llm, deadline) if settings.llm_available else None
             if resolver is not None and analysis is not None:

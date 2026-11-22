@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -213,6 +214,20 @@ class WebGatewayTest(unittest.TestCase):
 
 
 class CatalogSnapshotTest(unittest.TestCase):
+    def test_examples_follow_the_live_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "items.json"
+            source.write_text(json.dumps([{"id": "coffee", "name": "Кофе", "price": 900, "city": "Шуя"}]), encoding="utf-8")
+            with RunningServer(source) as server:
+                status, _, body = call(server.port, "GET", "/api/examples")
+                self.assertEqual(status, 200)
+                self.assertEqual(as_json(body), {"kind": "catalog", "examples": [{"text": "Кофе. Шуя, до 900 ₽"}]})
+
+                source.write_text(json.dumps([{"id": "tripod", "name": "Штатив", "price": 800, "city": "Псков"}]), encoding="utf-8")
+                status, _, body = call(server.port, "GET", "/api/examples")
+                self.assertEqual(status, 200)
+                self.assertEqual(as_json(body), {"kind": "catalog", "examples": [{"text": "Штатив. Псков, до 800 ₽"}]})
+
     def test_answer_and_cards_use_one_version_even_when_source_changes(self) -> None:
         first_row = {"id": "same", "title": "Термос", "price": 900, "city": "Псков"}
         later_row = {**first_row, "price": 1500, "city": "Калуга"}
@@ -276,10 +291,12 @@ class ModelReportingTest(unittest.TestCase):
                 self.assertEqual(status, 200, body)
                 self.assertEqual(len(self.gateway.requests), number)
                 self.assertEqual(headers["X-Model-Calls"], "1")
+                self.assertGreaterEqual(int(headers["X-Model-Elapsed-Ms"]), 0)
                 self.assertEqual(headers.get("X-Model-Tokens"), tokens)
         status, headers, body = self.ask("Нужен стол в Таганроге")
         self.assertEqual(status, 200, body)
         self.assertEqual(headers["X-Model-Calls"], "0")
+        self.assertNotIn("X-Model-Elapsed-Ms", headers)
         self.assertEqual(headers["X-Model-Tokens"], "0")
         self.assertEqual(len(self.gateway.requests), 3)
 
@@ -290,6 +307,36 @@ class ModelReportingTest(unittest.TestCase):
         self.assertEqual(status, 200, body)
         self.assertEqual(len(self.gateway.requests), 2)
         self.assertEqual(headers["X-Model-Calls"], "1")
+
+    def test_local_request_finishes_while_gateway_is_busy(self) -> None:
+        entered = threading.Event()
+        second_entered = threading.Event()
+        release = threading.Event()
+
+        def delayed_response():
+            if entered.is_set():
+                second_entered.set()
+            else:
+                entered.set()
+                release.wait(timeout=8)
+            return 200, {}, envelope({"categories": ["table"]})
+
+        with patch.object(self.gateway, "next_response", side_effect=delayed_response), ThreadPoolExecutor(3) as pool:
+            slow = pool.submit(self.ask)
+            try:
+                self.assertTrue(entered.wait(timeout=5))
+                another = pool.submit(self.ask)
+                local = pool.submit(self.ask, "Нужен стол в Таганроге до 5000 ₽")
+                status, headers, body = local.result(timeout=3)
+                self.assertEqual(status, 200, body)
+                self.assertEqual(headers["X-Model-Calls"], "0")
+                self.assertFalse(slow.done())
+                self.assertFalse(second_entered.wait(timeout=0.4))
+            finally:
+                release.set()
+            self.assertEqual(slow.result(timeout=5)[0], 200)
+            self.assertEqual(another.result(timeout=5)[0], 200)
+            self.assertTrue(second_entered.is_set())
 
     def test_gateway_error_still_reports_attempt(self) -> None:
         self.gateway.enqueue(503, b'{"error":{"message":"gateway offline"}}')

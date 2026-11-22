@@ -11,7 +11,7 @@ from app.jsonio import JsonError, load_json_file
 PREVIOUS_RESULT = "model-previous.json"
 CURRENT_RESULT = "model-current.json"
 _Params = ParamSpec("_Params")
-_Result = TypeVar("_Result", str, dict[str, Any], dict[str, Any] | None)
+_Result = TypeVar("_Result", str, bool, dict[str, Any], dict[str, Any] | None)
 
 
 class DialogueAnalysis:
@@ -27,7 +27,7 @@ class DialogueAnalysis:
              ) -> Callable[Concatenate[str, _Params], _Result]:
         def resolve(text: str, *args: _Params.args, **kwargs: _Params.kwargs) -> _Result:
             previous = self.previous.get("result")
-            if self.previous.get("text") == text and isinstance(previous, (str, dict)):
+            if self.previous.get("text") == text and isinstance(previous, (str, bool, dict)):
                 result = cast(_Result, previous)
             else:
                 result = resolver(text, *args, **kwargs)

@@ -6,7 +6,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 from app.catalog import load_json_data
 from app.catalog.explain import money
@@ -45,8 +45,14 @@ _QUERY_FILLER = (FILLER_WORDS - {"не"}) | {
     "благодарю", "понятно", "понял", "ясно", "все", "доступные", "г", "либо",
 }
 _FLEETING_VOWEL = re.compile(r"([бвгджзклмнпрстфхцчшщ])[ое]к$")
+_PREFERENCE_CLAUSE = re.compile(r"\b(?:чтобы|чтоб|желательно|по возможности)\b")
+_STRICT_CLAUSE_WORDS = frozenset({"не", "без", "из", "только", "кроме", "обязательно", "должен", "должна", "должно"})
+_ADJECTIVE_ENDING = re.compile(r"[а-я]{3,}(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ую|юю|ого|его|ых|их|ому|ему|ыми|ими)$")
+_REPEATED_LAST_LETTER = re.compile(r"([а-я])\1+$")
 
 ProductResolver = Callable[[str], str]
+PreferenceChecker = Callable[[str], bool]
+_PRODUCT_FIELDS = frozenset({"id", "title", "price_rub", "city_id"})
 
 
 def _terms(text: str) -> tuple[str, ...]:
@@ -61,6 +67,10 @@ def _forms(word: str) -> frozenset[str]:
     if len(word) >= 5 and _FLEETING_VOWEL.search(word):
         forms.add(_FLEETING_VOWEL.sub(r"\1к", word))
     return frozenset(forms)
+
+
+def _looks_like_adjective(word: str) -> bool:
+    return bool(_ADJECTIVE_ENDING.fullmatch(_REPEATED_LAST_LETTER.sub(r"\1", word)))
 
 
 def _city_key(words: Sequence[str]) -> tuple[str, ...]:
@@ -90,6 +100,7 @@ class Product:
     city_name: str
     search_texts: tuple[str, ...] = ()
     own_attributes: tuple[str, ...] = ()
+    city_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +134,23 @@ def _parse_product(raw: object, position: int) -> Product:
     own = tuple(
         value for key, value in attributes.items() if normalize_text(key) in _OWN_ATTRIBUTES and isinstance(value, str)
     ) if isinstance(attributes, dict) else ()
-    return Product(listing_id, title.strip(), price, city_id.strip(), city_name.strip(), search_texts, own)
+    city_aliases = tuple(extract_all_strings(raw.get("city_aliases")))
+    return Product(listing_id, title.strip(), price, city_id.strip(), city_name.strip(), search_texts, own, city_aliases)
+
+
+def is_text_catalog(document: Any) -> bool:
+    """Распознаёт форматы, отличимые от массива объявлений по ТЗ."""
+    if isinstance(document, dict):
+        document = document.get("listings", document.get("products"))
+    return isinstance(document, list) and any(
+        isinstance(row, dict) and (
+            any(short in row and standard not in row for short, standard in (
+                ("name", "title"), ("price", "price_rub"), ("city", "city_id"),
+            ))
+            or (_PRODUCT_FIELDS <= row.keys() and "category" not in row and "description" not in row)
+        )
+        for row in document
+    )
 
 
 class TextCatalog:
@@ -158,8 +185,9 @@ class TextCatalog:
                     self.head_postings[form].add(product.id)
                 for form in purpose:
                     self.purpose_postings[form].add(product.id)
-            catalog_aliases[_terms(product.city_id)].add(product.city_id)
-            catalog_aliases[_terms(product.city_name)].add(product.city_id)
+            for name in (product.city_id, product.city_name, *product.city_aliases):
+                if terms := _terms(name):
+                    catalog_aliases[terms].add(product.city_id)
         catalog_stems: dict[tuple[str, ...], set[str]] = defaultdict(set)
         for alias, ids in catalog_aliases.items():
             catalog_stems[_city_key(alias)].update(ids)
@@ -178,7 +206,11 @@ class TextCatalog:
     @classmethod
     def load(cls, source: Path | str) -> TextCatalog:
         """Читает текущий документ из заданного источника и строит индекс."""
-        raw = load_json_data(source)
+        return cls.from_document(load_json_data(source))
+
+    @classmethod
+    def from_document(cls, raw: Any) -> TextCatalog:
+        """Строит индекс по одному снимку каталога."""
         if isinstance(raw, dict):
             raw = raw.get("listings", raw.get("products"))
         if not isinstance(raw, list):
@@ -226,7 +258,11 @@ class TextCatalog:
                     cities = self.city_forms.get(bases[start:end])
                 if cities:
                     positions.update(range(start, end))
-                    if {"или", "либо"}.intersection(tokens[previous_end:start]):
+                    qualifier = start - 1 if start and tokens[start - 1] in {"в", "во", "из"} else start
+                    if qualifier and tokens[qualifier - 1] == "не":
+                        positions.update(range(qualifier - 1, start))
+                        selected.difference_update(cities)
+                    elif {"или", "либо"}.intersection(tokens[previous_end:start]):
                         selected.update(cities)
                     else:
                         selected = set(cities)
@@ -275,6 +311,8 @@ class TextCatalog:
             if amount.kind in CAPPING_KINDS
         ]
         budget = budgets[-1] if budgets else None
+        if tokens[:1] == ("тогда",) and (city_mentioned or budget is not None):
+            ignored.add(0)
         selected = {
             i for i, word in enumerate(tokens)
             if i not in ignored and word != "₽" and word not in _QUERY_FILLER and word not in _PURPOSE_WORDS
@@ -290,6 +328,7 @@ class TextCatalog:
 
     def answer(
         self, texts: Sequence[str], *, resolver: ProductResolver | None = None,
+        preference_checker: PreferenceChecker | None = None,
     ) -> dict[str, object]:
         """Подбирает альтернативы одной товарной позиции по истории диалога."""
         city = None
@@ -326,11 +365,20 @@ class TextCatalog:
         else:
             ids = self.matching_ids(terms)
             if not ids:
-                ids, wanted_description = self._resolve_product(terms, required_terms, phrase, descriptive, resolver)
+                preference = not descriptive and self._has_catalog_subject(phrase)
+                ids, wanted_description = self._resolve_product(
+                    terms, required_terms, phrase, descriptive or preference, resolver,
+                    check_preference=preference, preference_checker=preference_checker,
+                )
                 if wanted_description and not ids:
                     missing.append(response.QUESTION_CATEGORIES)
         if missing:
-            return _clarify(missing)
+            titles = []
+            if (response.QUESTION_CATEGORIES in missing and descriptive
+                    and not {"не", "без"}.intersection(required_terms)):
+                titles = self._related_titles(terms, city, budget)
+            cities = sorted({product.city_name for product in self.products.values()})
+            return _clarify(missing, titles, cities)
 
         if not ids:
             return response.no_match("В каталоге нет совпадений по названию. Проверьте название товара.")
@@ -351,27 +399,68 @@ class TextCatalog:
             response.option(
                 [product.id],
                 product.price_rub,
-                f"{product.title} — {money(product.price_rub)}. Самовывоз: {product.city_name}.",
+                f"{product.title} — {money(product.price_rub)}. Город: {product.city_name}.",
             )
             for product in matches[:limit]
             if product.price_rub <= budget
         ])
 
+    def _related_titles(self, terms: Sequence[str], city: str | None, budget: int | None) -> list[str]:
+        """Предлагает товары с совпадающими словами из каталога."""
+        scores: dict[str, int] = defaultdict(int)
+        for term in set(terms) - _PURPOSE_WORDS - GENERIC_PRODUCT_WORDS:
+            for item_id in self._postings(term, self.head_postings) | self._postings(term, self.purpose_postings):
+                scores[item_id] += 1
+        available = [
+            self.products[item_id] for item_id in scores
+            if (city is None or self.products[item_id].city_id == city)
+            and (budget is None or self.products[item_id].price_rub <= budget)
+        ]
+        available.sort(key=lambda product: (-scores[product.id], product.price_rub, product.id))
+        return list(dict.fromkeys(product.title for product in available))[:MAX_OPTIONS]
+
+    def _has_catalog_subject(self, phrase: str) -> bool:
+        """Распознаёт известный предмет с отдельной фразой о пожеланиях."""
+        head, *tail = _PREFERENCE_CLAUSE.split(phrase, maxsplit=1)
+        if not tail:
+            return False
+        name = tuple(term for term in _terms(head) if term not in _QUERY_FILLER)
+        return bool(self.matching_ids(name))
+
     def _resolve_product(
         self, terms: Sequence[str], required_terms: Sequence[str], phrase: str,
         descriptive: bool, resolver: ProductResolver | None,
+        *, check_preference: bool, preference_checker: PreferenceChecker | None,
     ) -> tuple[set[str], bool]:
         """Разбирает осмысленную фразу, которую индекс не сопоставил с названием."""
-        anchors = [
-            hits for word in required_terms
-            if word not in _PURPOSE_WORDS and (hits := self._postings(word, self.head_postings))
-        ]
+        postings = {word: self._postings(word, self.head_postings)
+                    for word in required_terms if word not in _PURPOSE_WORDS}
+        anchors = [hits for hits in postings.values() if hits]
         unknown_words = {
             word for word in terms if word.isalpha() and word not in (GENERIC_PRODUCT_WORDS | _PURPOSE_WORDS)
         }
-        uncertain = descriptive or (len(unknown_words) > 1 and not anchors)
+        unmatched_modifier = (
+            not descriptive and not _PURPOSE_WORDS.intersection(terms)
+            and any(hits and not _looks_like_adjective(word) for word, hits in postings.items())
+            and any(not hits and _looks_like_adjective(word) for word, hits in postings.items())
+        )
+        uncertain = descriptive or unmatched_modifier or (len(unknown_words) > 1 and not anchors)
         if not uncertain or is_unintelligible(phrase):
             return set(), False
+        if check_preference or unmatched_modifier:
+            detail = _PREFERENCE_CLAUSE.split(phrase, maxsplit=1)[1] if check_preference else phrase
+            if _STRICT_CLAUSE_WORDS.intersection(_terms(detail)) or any(char.isdigit() for char in detail):
+                return set(), True
+        if unmatched_modifier:
+            known = tuple(word for word, hits in postings.items() if hits)
+            ids = self.matching_ids(known)
+            if not ids or preference_checker is None:
+                return set(), True
+            remaining = " ".join(word for word, hits in postings.items() if not hits)
+            context = f"Запрос: {phrase}\nСовпало: {' '.join(known)}\nОстальное: {remaining}"
+            if len(context.encode("utf-8")) > 4000:
+                return set(), True
+            return (ids if preference_checker(context) else set()), True
         if resolver is None or len(phrase.encode("utf-8")) > 4000:
             return set(), True
 
@@ -380,14 +469,20 @@ class TextCatalog:
         return self.matching_ids(rewritten).intersection(*anchors), True
 
 
-def _clarify(fields: Sequence[str]) -> dict[str, object]:
+def _clarify(fields: Sequence[str], titles: Sequence[str], cities: Sequence[str]) -> dict[str, object]:
     """Задаёт вопросы в форме ответа контракта без списка фиксированных классов."""
     questions = response.clarify(fields)
     texts = {
-        response.QUESTION_CATEGORIES: "Какой товар ищете? Укажите название и важные слова, например «железная решётка».",
+        response.QUESTION_CATEGORIES: "Какой товар ищете? Укажите название или опишите, как он выглядит.",
         response.QUESTION_CITY: "В каком городе нужен товар?",
         response.QUESTION_BUDGET: "Сколько рублей готовы потратить на один вариант?",
     }
+    if titles:
+        choices = ", ".join(f"«{title}»" for title in titles)
+        texts[response.QUESTION_CATEGORIES] = f"Какой товар ищете? Подойдёт один из этих вариантов: {choices}?"
+    if cities:
+        prefix = "Например" if len(cities) > 4 else "Города в каталоге"
+        texts[response.QUESTION_CITY] += f" {prefix}: {', '.join(cities[:4])}."
     for question in questions["questions"]:
         question["text"] = texts[question["field"]]
     return questions

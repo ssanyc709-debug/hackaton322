@@ -16,7 +16,7 @@ from app.catalog.text_search import TextCatalog
 from app.config import LlmConfig
 from app.contract.response import validate_with_schema
 from app.llm.client import build_payload
-from app.llm.product import make_product_resolver
+from app.llm.product import make_preference_checker, make_product_resolver
 from tests.test_qa_support import ask, run_cli
 from web.serve import build_api
 
@@ -97,6 +97,31 @@ class TextSearchTest(unittest.TestCase):
             ["stick"],
         )
 
+    def test_city_only_followup_does_not_replace_product(self) -> None:
+        resolver = Mock()
+        initial = "Железная решётка, Томск или Кемерово, до 1000 ₽"
+        answer = self.index.answer([initial, "Тогда в Кемерове"], resolver=resolver)
+        self.assertEqual(ids(answer), ["gl-other"])
+        answer = self.index.answer([initial, "Не в Томске, а в Кемерове. Максимум 150 ₽"], resolver=resolver)
+        self.assertEqual(ids(answer), ["gl-other"])
+        resolver.assert_not_called()
+
+    def test_clarification_suggests_only_catalog_products_and_cities(self) -> None:
+        self.write([
+            {"id": "ground", "name": "Кофе молотый", "city": "Шуя", "price": 700},
+            {"id": "grinder", "name": "Кофемолка", "aliases": ["Мельница для кофе"], "city": "Псков", "price": 900},
+            {"id": "other", "name": "Термос", "city": "Псков", "price": 600},
+        ])
+        resolver = Mock(return_value="")
+        result = TextCatalog.load(self.path).answer(["Хочу что-нибудь для кофе до 1000 ₽"], resolver=resolver)
+        questions = {question["field"]: question["text"] for question in result["questions"]}
+        self.assertEqual(set(questions), {"city_id", "categories"})
+        self.assertIn("Шуя", questions["city_id"])
+        self.assertIn("Кофемолка", questions["categories"])
+        self.assertNotIn("Термос", questions["categories"])
+        self.assertNotIn("Таганрог", questions["city_id"])
+        resolver.assert_called_once()
+
     def test_description_uses_one_call_per_request_even_before_budget(self) -> None:
         resolver = Mock(return_value="железная решётка")
         text = "Нужно что-нибудь чтобы закрыть отверстие, в Томске"
@@ -163,6 +188,90 @@ class TextSearchTest(unittest.TestCase):
         self.assertEqual([question["field"] for question in result["questions"]], ["categories"])
         resolver.assert_not_called()
 
+    def test_subjective_request_uses_model_and_catalog_enforces_filters(self) -> None:
+        self.write([
+            {"id": "coffee", "name": "Кофе молотый", "city": "Вологда", "price": 700},
+            {"id": "expensive", "name": "Кофе в зёрнах", "city": "Вологда", "price": 1300},
+            {"id": "other-city", "name": "Кофе", "city": "Псков", "price": 450},
+            {"id": "grinder", "name": "Кофемолка", "city": "Вологда", "price": 550},
+        ])
+        index = TextCatalog.load(self.path)
+        resolver = Mock(return_value="кофе")
+        query = "Мне нужен кофе чтобы вкусный был, неважно какая страна, надо привезти в Вологду, бюджет до 1000"
+        result = index.answer([query], resolver=resolver)
+        self.assertEqual(ids(result), ["coffee"])
+        self.assertEqual(result["options"][0]["total_rub"], 700)
+        resolver.assert_called_once()
+        self.assertNotIn("вологду", resolver.call_args.args[0])
+        self.assertNotIn("1000", resolver.call_args.args[0])
+
+        resolver.reset_mock(return_value=True)
+        resolver.return_value = "кофемолка"
+        self.assertEqual(index.answer([query], resolver=resolver)["status"], "clarify")
+        resolver.assert_called_once()
+
+        resolver.reset_mock()
+        exact = index.answer(["Кофе молотый, Вологда, до 1000 ₽"], resolver=resolver)
+        self.assertEqual(ids(exact), ["coffee"])
+        strict = index.answer(["Кофе в Вологде до 1000 ₽, чтобы без сахара"], resolver=resolver)
+        self.assertEqual(strict["status"], "clarify")
+        resolver.assert_not_called()
+
+    def test_known_product_with_unmatched_modifier_can_reach_model(self) -> None:
+        self.write([
+            {"id": "ground", "name": "Кофе молотый", "city": "Вологда", "price": 490},
+            {"id": "beans", "name": "Кофе в зёрнах", "city": "Вологда", "price": 650},
+            {"id": "other-city", "name": "Кофе", "city": "Псков", "price": 400},
+            {"id": "grinder", "name": "Кофемолка", "city": "Вологда", "price": 500},
+            {"id": "flask", "name": "Фляга стальная", "city": "Вологда", "price": 750},
+        ])
+        index = TextCatalog.load(self.path)
+        for query in ("дай вкусный кофе", "мне вкусныйй кофе дай блядота"):
+            with self.subTest(query=query):
+                checker = Mock(return_value=True)
+                resolver = Mock(return_value="кофемолка")
+                result = index.answer(["Вологда, до 800 ₽", query], resolver=resolver, preference_checker=checker)
+                self.assertEqual(ids(result), ["ground", "beans"])
+                checker.assert_called_once()
+                resolver.assert_not_called()
+
+        checker = Mock(return_value=True)
+        result = index.answer(["Прикольная фляга в Вологде до 800 ₽"], preference_checker=checker)
+        self.assertEqual(ids(result), ["flask"])
+        checker.assert_called_once()
+
+        checker.reset_mock()
+        result = index.answer(["Фляга стальная в Вологде до 800 ₽"], preference_checker=checker)
+        self.assertEqual(ids(result), ["flask"])
+        checker.assert_not_called()
+
+        resolver = Mock(return_value="кофе")
+        result = index.answer(["Вологда, до 800 ₽", "дай вкусный кофеёк"], resolver=resolver, preference_checker=checker)
+        self.assertEqual(ids(result), ["ground", "beans"])
+        resolver.assert_called_once()
+        checker.assert_not_called()
+
+    def test_rewrite_of_named_product_keeps_catalog_words_and_model_number(self) -> None:
+        self.write([
+            {"id": "ground", "name": "Кофе молотый", "city": "Вологда", "price": 490},
+            {"id": "beans", "name": "Кофе в зёрнах", "city": "Вологда", "price": 650},
+            {"id": "unit", "name": "Кофеварка серии 100", "city": "Вологда", "price": 2000},
+        ])
+        index = TextCatalog.load(self.path)
+        checker = Mock(return_value=True)
+        result = index.answer(["Вкусный молотый кофе в Вологде до 1000 ₽"], preference_checker=checker)
+        self.assertEqual(ids(result), ["ground"])
+
+        checker.reset_mock()
+        result = index.answer(["Удобная кофеварка 200 в Вологде до 3000 ₽"], preference_checker=checker)
+        self.assertEqual(result["status"], "clarify")
+        checker.assert_not_called()
+
+        checker.return_value = False
+        result = index.answer(["Безлактозный кофе в Вологде до 1000 ₽"], preference_checker=checker)
+        self.assertEqual(result["status"], "clarify")
+        checker.assert_called_once()
+
     def test_model_cannot_drop_a_word_already_understood_locally(self) -> None:
         text = "Нужно что-нибудь железное чтобы закрыть отверстие, в Томске до 1000 ₽"
         resolver = Mock(return_value="деревянная решётка")
@@ -212,6 +321,31 @@ class TextSearchTest(unittest.TestCase):
         self.write([{**ROWS[-3], "id": "new-id"}])
         updated = run_cli(ask(query), catalog=self.path, extra_args=("--text-search",))
         self.assertEqual(ids(updated.one_json_object()), ["new-id"])
+
+    def test_auto_mode_builds_lookup_from_the_current_catalog(self) -> None:
+        self.write({"products": [{
+            "id": "old", "name": "Комплект для рамы", "price": 750, "city": "Шуя",
+            "aliases": ["Натяжитель"], "city_aliases": ["Старый посад"],
+        }]})
+        api = build_api(self.path, offline=True)
+
+        def search(query):
+            code, output, metrics = api.answer(json.dumps(ask(query)).encode(), include_cards=True)
+            self.assertEqual(code, 200, output)
+            self.assertEqual(metrics["model_calls"], 0)
+            return output
+
+        result = search("Натяжитель в Старом посаде, до 1000 ₽")
+        self.assertEqual(ids(result["answer"]), ["old"])
+        self.assertEqual(result["items"][0]["city_name"], "Шуя")
+        self.write([{
+            "id": "new", "title": "Пресс настольный", "price_rub": 890, "city_id": "new-place",
+            "city_name": "Таруса", "keywords": {"search": ["Ручной зажим"]},
+        }])
+        result = search("Ручной зажим в Тарусе, до 1000 ₽")
+        self.assertEqual(ids(result["answer"]), ["new"])
+        self.assertEqual(result["items"][0]["price_rub"], 890)
+        self.assertEqual(search("Натяжитель в Тарусе, до 1000 ₽")["answer"]["status"], "no_match")
 
     def test_expensive_items_match_response_schema(self) -> None:
         self.write([{"id": "machine", "title": "Промышленный станок", "price_rub": 12_000_000, "city": "Томск"}])
@@ -282,6 +416,16 @@ class TextSearchTest(unittest.TestCase):
 
 
 class ProductResolverTest(unittest.TestCase):
+    def test_preference_checker_accepts_only_a_boolean(self) -> None:
+        config = LlmConfig(base_url="https://example.invalid", model="test", api_key="fake")
+        for value, expected in ((True, True), (False, False), ("true", False)):
+            with self.subTest(value=value):
+                def gateway(*args, sanitize, **kwargs):
+                    return sanitize({"optional": value})
+
+                check = make_preference_checker(config, 60.0, complete_fn=gateway)
+                self.assertEqual(check("Совпало: кофе\nОстальное: вкусный"), expected)
+
     def test_payload_uses_small_schema_without_catalog_data(self) -> None:
         config = LlmConfig(base_url="https://example.invalid", model="test", api_key="fake")
         captured = []

@@ -50,11 +50,10 @@ var els = {
   send: document.getElementById("send"),
   newDialog: document.getElementById("new-dialog"),
   examples: document.getElementById("examples"),
+  examplePanel: document.getElementById("example-panel"),
 };
 
-var PLACEHOLDER =
-  "Здесь появятся варианты комплекта, уточняющие вопросы или спокойное объяснение, " +
-  "почему подобрать не удалось.";
+var PLACEHOLDER = "Введите запрос, чтобы увидеть подходящие товары.";
 
 // --- сеть -------------------------------------------------------------------
 
@@ -85,6 +84,7 @@ function serviceError(message) {
 
 /** Возвращает подбор, карточки из того же снимка каталога и метрики. */
 async function askBackend(messages, dialogueToken) {
+  var started = performance.now();
   var response;
   var headers = { "Content-Type": "application/json", Accept: "application/json" };
   if (dialogueToken) headers["X-Dialogue-Token"] = dialogueToken;
@@ -106,23 +106,25 @@ async function askBackend(messages, dialogueToken) {
   if (!response.ok) {
     var reason = payload && payload.error ? payload.error : "HTTP " + response.status;
     var error = serviceError(reason);
-    error.metrics = readMetrics(response);
+    error.metrics = readMetrics(response, started);
     throw error;
   }
   return {
     document: payload.answer,
     items: payload.items,
     dialogueToken: response.headers.get("X-Dialogue-Token") || "",
-    metrics: readMetrics(response),
+    metrics: readMetrics(response, started),
   };
 }
 
-function readMetrics(response) {
+function readMetrics(response, started) {
   var tokenHeader = response.headers.get("X-Model-Tokens");
+  var modelElapsedHeader = response.headers.get("X-Model-Elapsed-Ms");
   return {
     modelCalls: Number(response.headers.get("X-Model-Calls") || 0),
     tokens: tokenHeader === null ? null : Number(tokenHeader),
-    elapsedMs: Number(response.headers.get("X-Elapsed-Ms") || 0),
+    elapsedMs: Math.round(performance.now() - started),
+    modelElapsedMs: modelElapsedHeader === null ? null : Number(modelElapsedHeader),
     modelUnavailable: response.headers.get("X-Model-Unavailable") === "1",
     modelReused: response.headers.get("X-Model-Reused") === "1",
   };
@@ -175,6 +177,18 @@ function addBubble(role, text) {
 // --- панель ответа ----------------------------------------------------------
 
 function renderOption(option, index) {
+  var listingIds = option.listing_ids || [];
+  var single = listingIds.length === 1 ? state.cards.get(listingIds[0]) : null;
+  if (single) {
+    var listing = el("article", "option option--single");
+    var listingBody = el("div", "option__body");
+    listingBody.append(el("h3", "option__title", single.title || listingIds[0]));
+    if (single.city_name) listingBody.append(el("p", "option__explanation", single.city_name));
+    var attributes = attributesText(single);
+    if (attributes) listingBody.append(el("p", "option__explanation", attributes));
+    listing.append(listingBody, el("p", "option__total", money(option.total_rub)));
+    return listing;
+  }
   var card = el("article", "option");
   var head = el("div", "option__head");
   head.append(el("h3", "option__title", "Вариант " + (index + 1)));
@@ -183,7 +197,7 @@ function renderOption(option, index) {
   card.append(el("p", "option__explanation", option.explanation));
 
   var list = el("ul", "items");
-  (option.listing_ids || []).forEach(function (id) {
+  listingIds.forEach(function (id) {
     var item = state.cards.get(id);
     var row = el("li", "item");
     if (!item) {
@@ -205,7 +219,6 @@ function renderOption(option, index) {
 
 function renderOk(document_) {
   var wrap = el("div", "answer answer--ok");
-  wrap.append(el("p", "answer__lead", "Подходящих вариантов: " + document_.options.length + ". Все в бюджете."));
   document_.options.forEach(function (option, index) {
     wrap.append(renderOption(option, index));
   });
@@ -258,7 +271,8 @@ function showInPanel(node) {
 /** Короткая реплика помощника в чате; подробности — в панели справа. */
 function echoInChat(document_) {
   if (document_.status === "ok") {
-    addBubble("assistant", "Подобрал вариантов: " + document_.options.length + " — смотрите справа.");
+    var summaries = ["Нашёл подходящий вариант.", "Нашёл два варианта.", "Нашёл три варианта."];
+    addBubble("assistant", summaries[document_.options.length - 1] || "Подобрал варианты.");
     return;
   }
   if (document_.status === "clarify") {
@@ -317,13 +331,14 @@ function showMetrics(metrics) {
   var model;
   if (metrics.modelCalls) {
     var cost = metrics.tokens === null ? "расход токенов неизвестен" : metrics.tokens + " токенов";
-    model = "вызов модели: да (" + cost + ")";
+    var modelTime = metrics.modelElapsedMs === null ? "" : ", ожидание шлюза " + metrics.modelElapsedMs + " мс";
+    model = "вызов модели: да (" + cost + modelTime + ")";
   } else if (metrics.modelReused) {
     model = "использован разбор модели из диалога (0 токенов)";
   } else if (metrics.modelUnavailable) {
     model = "вызов модели: нет (модель недоступна, разбор лексиконом)";
   } else {
-    model = "вызов модели: нет (лексикон)";
+    model = "0 токенов";
   }
   els.metrics.hidden = false;
   els.metrics.textContent = metrics.elapsedMs ? "Ответ за " + metrics.elapsedMs + " мс · " + model : model;
@@ -392,9 +407,23 @@ async function submit() {
 
 // --- примеры и сброс --------------------------------------------------------
 
-function renderExamples() {
-  EXAMPLES.forEach(function (example) {
-    var button = el("button", "button button--example", example.text + " — " + example.hint);
+async function loadExamples() {
+  try {
+    var response = await fetch("/api/examples", { cache: "no-store" });
+    if (!response.ok) return;
+    var data = await response.json();
+    renderExamples(data.kind === "furniture" ? EXAMPLES : data.examples);
+  } catch (_) {
+    // Форма поиска доступна и при сбое загрузки примеров.
+  }
+}
+
+function renderExamples(examples) {
+  els.examples.replaceChildren();
+  els.examplePanel.hidden = !examples.length;
+  examples.forEach(function (example) {
+    var button = el("button", "button button--example", example.text);
+    if (example.hint) button.title = example.hint;
     button.type = "button";
     button.addEventListener("click", function () {
       if (state.busy) return;
@@ -431,10 +460,11 @@ function boot() {
   });
   els.newDialog.addEventListener("click", function () {
     resetDialog();
+    loadExamples();
     els.input.focus();
   });
-  renderExamples();
-  addBubble("assistant", "Опишите, что нужно подобрать: товары, город и бюджет на весь комплект.");
+  loadExamples();
+  addBubble("assistant", "Какой товар ищете? Можно сразу указать город и бюджет.");
 }
 
 boot();

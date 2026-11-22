@@ -248,6 +248,27 @@ class ModelCallPolicyTest(unittest.TestCase):
         self.assertEqual(missing_fields(unresolved), (FIELD_CATEGORIES,))
         self.assertEqual(merge_history([query, "Лампа"]).categories, ("table", "lamp"))
 
+    def test_explicit_change_cuts_previous_unresolved_description(self) -> None:
+        request = "Теперь найди то, на чём можно писать"
+        slots = merge_history(
+            ["Хочу что-нибудь, чтобы читать вечером. Таганрог, до 5000 ₽", request],
+            resolver=lambda prompt, _: self.calls.append(prompt) or {"categories": ["table"]},
+        )
+        self.assertEqual(self.calls, [request])
+        self.assertEqual(slots.categories, ("table",))
+        self.assertEqual((slots.city_id, slots.budget_rub), ("taganrog", 5000))
+
+    def test_additive_description_keeps_previously_named_product(self) -> None:
+        request = "Добавь ещё что-нибудь, чтобы читать ночью"
+        opener = "Стол в Таганроге до 5000 ₽"
+        slots = merge_history(
+            [opener, request, "До 4500 ₽"],
+            resolver=lambda prompt, _: self.calls.append(prompt) or {"categories": ["lamp"]},
+        )
+        self.assertEqual(self.calls, [request])
+        self.assertEqual(slots.categories, ("table", "lamp"))
+        self.assertEqual((slots.city_id, slots.budget_rub), ("taganrog", 4500))
+
     def test_removal_and_new_description_do_not_restore_old_item(self) -> None:
         result = merge_history(
             ["Лампа в Таганроге до 5000 ₽", "Лампа больше не нужна, хочу деревяшку с четырьмя ножками"],
