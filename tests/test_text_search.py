@@ -97,18 +97,37 @@ class TextSearchTest(unittest.TestCase):
             ["stick"],
         )
 
-    def test_description_uses_one_call_when_city_and_budget_are_known(self) -> None:
+    def test_description_uses_one_call_per_request_even_before_budget(self) -> None:
         resolver = Mock(return_value="железная решётка")
         text = "Нужно что-нибудь чтобы закрыть отверстие, в Томске"
         missing = self.index.answer([text], resolver=resolver)
         self.assertEqual([question["field"] for question in missing["questions"]], ["budget_rub"])
-        resolver.assert_not_called()
+        resolver.assert_called_once()
+        resolver.reset_mock()
         result = self.index.answer([text, "До 1000 ₽"], resolver=resolver)
         self.assertEqual(ids(result), ["gl-1"])
         resolver.assert_called_once()
         self.assertIn("чтобы закрыть отверстие", resolver.call_args.args[0])
         self.assertNotIn("томске", resolver.call_args.args[0])
         self.assertNotIn("1000", resolver.call_args.args[0])
+
+    def test_functional_description_works_after_catalog_replacement(self) -> None:
+        query = "Найди мне то, что будет молоть кофе"
+        for city, product_id in (("Вологда", "grinder-a"), ("Бийск", "grinder-b")):
+            with self.subTest(city=city):
+                self.write([
+                    {"id": product_id, "title": "Кофемолка ручная", "city": city, "price": 1200},
+                    {"id": "beans", "title": "Кофе в зёрнах", "city": city, "price": 450},
+                ])
+                index = TextCatalog.load(self.path)
+                resolver = Mock(return_value="кофемолка")
+                missing = index.answer([query], resolver=resolver)
+                self.assertEqual([q["field"] for q in missing["questions"]], ["budget_rub", "city_id"])
+                resolver.assert_called_once()
+                resolver.reset_mock()
+                answer = index.answer([query, f"{city}, до 1500 ₽"], resolver=resolver)
+                self.assertEqual(ids(answer), [product_id])
+                resolver.assert_called_once()
 
     def test_nested_catalog_alias_bypasses_model(self) -> None:
         self.write([{

@@ -24,6 +24,7 @@ from app.nlp.numbers import (
     normalize_text,
     tokenize,
 )
+from app.nlp.product_intent import describes_product, terms_before_usage
 
 _OPTION_WORDS = frozenset({"вариант", "варианта", "варианты", "вариантов", "варианте"})
 _PURPOSE_WORDS = frozenset({"для", "под", "совместим", "совместима", "совместимый"})
@@ -41,10 +42,6 @@ _QUERY_FILLER = (FILLER_WORDS - {"не"}) | {
     "хорошо", "ага", "угу", "да", "ладно", "еще", "привет", "здравствуйте",
     "благодарю", "понятно", "понял", "ясно", "все", "доступные", "г",
 }
-_DESCRIPTIVE = re.compile(
-    r"\b(?:что[- ](?:нибудь|то)|что\s+(?:посоветуешь|посоветуете)|"
-    r"чем\s+можно|на\s+чем|для\s+того\s+чтобы)\b"
-)
 _FLEETING_VOWEL = re.compile(r"([бвгджзклмнпрстфхцчшщ])[ое]к$")
 
 ProductResolver = Callable[[str], str]
@@ -269,7 +266,6 @@ class TextCatalog:
         limit = MAX_OPTIONS
         terms: tuple[str, ...] = ()
         phrase = ""
-        descriptive = False
         for text in texts:
             step = self.parse_query(text)
             if step.city_mentioned:
@@ -281,30 +277,37 @@ class TextCatalog:
             if step.terms:
                 terms = step.terms
                 phrase = step.phrase
-                descriptive = _DESCRIPTIVE.search(normalize_text(text)) is not None
+        descriptive = describes_product(phrase)
+        if descriptive:
+            before_usage = terms_before_usage(phrase)
+            required_terms = tuple(word for word in terms if word in before_usage)
+        else:
+            required_terms = terms
 
         missing = []
         if budget is None:
             missing.append(response.QUESTION_BUDGET)
         if city is None:
             missing.append(response.QUESTION_CITY)
-        if not terms or "не" in terms or "без" in terms:
+        ids = set()
+        if not terms or "не" in required_terms or "без" in required_terms:
             missing.append(response.QUESTION_CATEGORIES)
+        else:
+            ids = self.matching_ids(terms)
+            if descriptive and not ids:
+                if resolver is not None and len(phrase.encode("utf-8")) <= 4000:
+                    # Совпавшие свойства товара обязательны. Слова о его применении
+                    # могут называть другой предмет, например бумагу для письма.
+                    anchors = [
+                        hits for word in required_terms
+                        if word not in _PURPOSE_WORDS and (hits := self._postings(word, self.head_postings))
+                    ]
+                    rewritten = _terms(resolver(phrase))
+                    ids = self.matching_ids(rewritten).intersection(*anchors)
+                if not ids:
+                    missing.append(response.QUESTION_CATEGORIES)
         if missing:
             return _clarify(missing)
-
-        ids = self.matching_ids(terms)
-        if not ids and descriptive:
-            if resolver is not None and len(phrase.encode("utf-8")) <= 4000:
-                # Известные слова покупателя остаются обязательными даже после перефразирования.
-                anchors = [
-                    hits for word in terms
-                    if word not in _PURPOSE_WORDS and (hits := self._postings(word, self.head_postings))
-                ]
-                rewritten = _terms(resolver(phrase))
-                ids = self.matching_ids(rewritten).intersection(*anchors)
-            if not ids:
-                return _clarify([response.QUESTION_CATEGORIES])
 
         matches = sorted(
             (self.products[item_id] for item_id in ids if self.products[item_id].city_id == city),

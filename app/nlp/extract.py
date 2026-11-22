@@ -48,6 +48,7 @@ from app.nlp.numbers import (
     normalize_text,
     tokenize,
 )
+from app.nlp.product_intent import describes_product
 
 #: Верхняя граница «мелких» чисел: меньше этого числа не считаются бюджетом.
 MIN_BUDGET_GUESS = 1000
@@ -186,7 +187,7 @@ def extract_message(
 
     slots = _lexicon_slots(normalized)
     if resolver is not None and allow_model and not is_complete(slots):
-        slots = _apply_resolver(slots, text, resolver)
+        slots = resolve_categories(slots, text, resolver)
 
     if cache is not None:
         cache.put(text, slots)
@@ -427,20 +428,15 @@ def _detect_adjustable(normalized: str) -> bool | None:
     return None
 
 
-def _apply_resolver(slots: Slots, text: str, resolver: Resolver) -> Slots:
+def resolve_categories(slots: Slots, text: str, resolver: Resolver) -> Slots:
     """Дополняет категории результатом одного вызова модели.
 
-    Перед вызовом проверяется :func:`model_can_help`: если модель всё равно не
-    может закрыть недостающую категорию (например, бюджет ещё неизвестен),
-    вызова нет. Исключения клиента модели (:class:`app.llm.client.LlmError`)
-    намеренно НЕ глушатся: сбой внешнего сервиса — это техническая ошибка запуска
-    (stderr + ненулевой код, CONTRACT.md §1), а не повод выдать ``no_match``
-    или «уточните заново». Пустой ответ модели (``None``/``{}``) — не ошибка:
-    она просто ничего не нашла, и условия остаются пустыми.
+    Описание назначения можно обработать до уточнения города и бюджета.
+    Для остальных формулировок сохраняется прежний порог вызова.
     """
-    if len(text.encode("utf-8")) > MAX_MODEL_TEXT_BYTES:
+    if not text or len(text.encode("utf-8")) > MAX_MODEL_TEXT_BYTES or not model_can_help(slots):
         return slots
-    if not model_can_help(slots):
+    if (slots.city_id is None or slots.budget_rub is None) and not describes_product(text):
         return slots
     raw = resolver(text, slots)
     if not raw:
@@ -465,21 +461,8 @@ def merge_model_slots(slots: Slots, raw: dict[str, object]) -> Slots:
 
 
 def model_can_help(slots: Slots) -> bool:
-    """CORE. Разрешает вызов модели для описательного запроса о товаре.
-
-    Вход: локально разобранные условия одной реплики или всего диалога.
-    Выход: True, когда город и бюджет известны, категория отсутствует и
-    покупатель не назвал неподдерживаемый предмет. Проверка занимает O(1).
-    Так «деревяшка с четырьмя ножками» с указанными городом и бюджетом
-    попадает в модель, а «диван», «в Азовском» и «до 900» ведут к уточнению.
-    Явно заданный нулевой бюджет считается известным.
-    """
-    return (
-        slots.city_id is not None
-        and slots.budget_rub is not None
-        and not slots.categories
-        and not slots.categories_unknown
-    )
+    """CORE. Проверяет, осталась ли категория, которую допустимо заполнить моделью."""
+    return not slots.categories and not slots.categories_unknown
 
 
 #: Короткие осмысленные ответы покупателя: подтверждение, благодарность,

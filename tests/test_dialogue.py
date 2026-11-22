@@ -175,9 +175,21 @@ class ModelCallPolicyTest(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_no_call_when_history_has_no_material_for_the_model(self) -> None:
-        """Ни города, ни бюджета: модель не выдумает их, вызов ничего не изменит."""
+        """Общая просьба без описания ведёт к уточнению."""
         merge_history(["Хочу мебель"], resolver=self.resolver)
         self.assertEqual(self.calls, [])
+
+    def test_description_can_be_resolved_before_city_and_budget(self) -> None:
+        query = "найди чет на чем писать можно"
+
+        def resolve(text: str, slots) -> dict[str, object]:
+            self.calls.append(text)
+            return {"categories": ["table"], "city_id": "azov", "budget_rub": 15000}
+
+        slots = merge_history([query], resolver=resolve)
+        self.assertEqual(self.calls, [query])
+        self.assertEqual(slots.categories, ("table",))
+        self.assertEqual(missing_fields(slots), (FIELD_CITY, FIELD_BUDGET))
 
     def test_model_error_is_not_swallowed(self) -> None:
         def broken(text: str, slots) -> dict[str, object]:

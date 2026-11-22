@@ -27,8 +27,8 @@ from app.nlp.extract import (
     MAX_MODEL_TEXT_BYTES,
     Resolver,
     extract_message,
-    merge_model_slots,
     model_can_help,
+    resolve_categories,
 )
 from app.nlp.lexicon import get_lexicon, order_categories
 from app.nlp.numbers import FILLER_WORDS, MONEY_HINTS, UNIT_RUB, find_amounts, normalize_text, tokenize
@@ -144,8 +144,8 @@ def _has_product_context(text: str) -> bool:
 def resolve_missing(state: Slots, user_texts: Sequence[str], resolver: Resolver) -> Slots:
     """CORE. Извлекает недостающие категории по содержательным фрагментам истории.
 
-    Город и бюджет уже известны локально. Фрагменты с описанием товара
-    передаются в хронологическом порядке одним запросом.
+    Фрагменты с описанием товара передаются в хронологическом порядке
+    одним запросом. Город и бюджет можно уточнить после разбора описания.
     """
     if not model_can_help(state):
         return state
@@ -155,13 +155,7 @@ def resolve_missing(state: Slots, user_texts: Sequence[str], resolver: Resolver)
         for part in _SENTENCE_BREAK.split(turn)
         if _has_product_context(part)
     ]
-    text = dialogue_text(product_texts)
-    if not text:
-        return state
-    raw = resolver(text, state)
-    if not raw:
-        return state
-    return merge_model_slots(state, raw)
+    return resolve_categories(state, dialogue_text(product_texts), resolver)
 
 
 def merge_step(state: Slots, step: Slots) -> Slots:
