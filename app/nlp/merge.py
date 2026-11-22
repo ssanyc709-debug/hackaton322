@@ -23,21 +23,19 @@ from app.model import (
 )
 from app.nlp.cache import LexiconCache
 from app.nlp.extract import (
-    CONFIRMATION_WORDS,
     MAX_MODEL_TEXT_BYTES,
     Resolver,
     extract_message,
+    has_product_context,
     model_can_help,
     resolve_categories,
 )
-from app.nlp.lexicon import get_lexicon, order_categories
-from app.nlp.numbers import FILLER_WORDS, MONEY_HINTS, UNIT_RUB, find_amounts, normalize_text, tokenize
+from app.nlp.lexicon import order_categories
+from app.nlp.product_intent import describes_product, requests_product
 
 #: Разделитель реплик в одном тексте для модели: модель видит диалог одним куском.
 MODEL_TEXT_SEPARATOR = " / "
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?;])\s+|[\r\n]+")
-_CONDITION_WORDS = FILLER_WORDS | MONEY_HINTS | {"ну", "давай", "давайте", "город"}
-_ACKNOWLEDGMENTS = CONFIRMATION_WORDS - {"нет", "да"}
 
 
 def merge_history(
@@ -65,11 +63,9 @@ def merge_history(
     при слове «ещё/также/добавь», отказанные категории удаляются, ограничения
     по характеристикам заменяются или снимаются явной командой. Неназванные
     поля сохраняются.
-    Модель подключается ОДИН раз на запрос и только если после слияния всей
-    истории обязательные условия всё ещё не закрыты (§5) И модель физически
-    способна их закрыть (:func:`model_can_help`): реплика «12 тысяч» сама по
-    себе не содержит города, но вместе с предыдущей даёт полный набор,
-    поэтому вызов модели здесь был бы лишним расходом токенов.
+    Модель подключается один раз на запрос, если товар надо выяснить по
+    репликам покупателя. Новая просьба об описанном товаре обновляет эту
+    часть диалога. Отдельные уточнения сохраняют уже разобранные условия.
     Сложность: время O(сумма длин реплик) + O(1) на слияние шага; память O(1).
     Почему именно он: свёртка даёт ровно семантику «последнее явное упоминание
     побеждает, остальное живёт», её легко протестировать по одному правилу на тест
@@ -82,13 +78,23 @@ def merge_history(
     Вызывается из: app/pipeline.py::answer, тесты, bench/load.py.
     """
     state = Slots()
-    for text in user_texts:
+    product_start = 0
+    active_resolver = resolver if allow_model else None
+    for position, text in enumerate(user_texts):
         # Локальный разбор каждой реплики: модель здесь не нужна, решение о вызове
         # принимается ниже — по СОСТОЯНИЮ ПОСЛЕ всей истории, а не по одной реплике.
         step = extract_message(text, cache=cache, resolver=None, allow_model=False)
         state = merge_step(state, step)
-    if resolver is not None and allow_model:
-        state = resolve_missing(state, user_texts, resolver)
+        if step.categories_explicit:
+            product_start = position + 1
+        elif (active_resolver is not None and not model_can_help(state)
+              and (describes_product(text)
+                   or (step.mentioned <= {FIELD_CITY, FIELD_BUDGET} and requests_product(text)))
+              and has_product_context(text, step)):
+            product_start = position
+            state = replace(state, categories=(), categories_unknown=(), categories_explicit=False)
+    if active_resolver is not None:
+        state = resolve_missing(state, user_texts[product_start:], active_resolver)
     return state
 
 
@@ -111,36 +117,6 @@ def dialogue_text(user_texts: Sequence[str]) -> str:
     return ""
 
 
-def _has_product_context(text: str) -> bool:
-    """Сохраняет фрагменты, которые могут уточнять товар или его характеристики."""
-    normalized = normalize_text(text)
-    tokens = tokenize(normalized)
-    if set(tokens) <= _ACKNOWLEDGMENTS:
-        return False
-
-    local = extract_message(text)
-    if local.mentioned - {FIELD_CITY, FIELD_BUDGET}:
-        return True
-
-    cities = get_lexicon().scan_cities(tokens)
-    known_positions = {hit.position for hit in cities}
-    for hit in cities:
-        if hit.value == "rostov-na-donu" and tokens[hit.position + 1:hit.position + 3] == ("на", "дону"):
-            known_positions.add(hit.position + 2)
-
-    budget_words: set[str] = set()
-    if local.budget_rub is not None:
-        for amount in find_amounts(normalized):
-            if amount.unit in (UNIT_RUB, None):
-                known_positions.update(range(amount.position, amount.position + len(amount.raw.split())))
-                budget_words.update(amount.trigger.split())
-
-    return any(
-        position not in known_positions and word not in _CONDITION_WORDS and word not in budget_words
-        for position, word in enumerate(tokens)
-    )
-
-
 def resolve_missing(state: Slots, user_texts: Sequence[str], resolver: Resolver) -> Slots:
     """CORE. Извлекает недостающие категории по содержательным фрагментам истории.
 
@@ -153,7 +129,7 @@ def resolve_missing(state: Slots, user_texts: Sequence[str], resolver: Resolver)
         part.strip()
         for turn in user_texts
         for part in _SENTENCE_BREAK.split(turn)
-        if _has_product_context(part)
+        if has_product_context(part)
     ]
     return resolve_categories(state, dialogue_text(product_texts), resolver)
 

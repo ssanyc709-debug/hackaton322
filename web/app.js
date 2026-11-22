@@ -103,15 +103,18 @@ async function askBackend(messages) {
   });
   if (!response.ok) {
     var reason = payload && payload.error ? payload.error : "HTTP " + response.status;
-    throw serviceError(reason);
+    var error = serviceError(reason);
+    error.metrics = readMetrics(response);
+    throw error;
   }
   return { document: payload, metrics: readMetrics(response) };
 }
 
 function readMetrics(response) {
+  var tokenHeader = response.headers.get("X-Model-Tokens");
   return {
     modelCalls: Number(response.headers.get("X-Model-Calls") || 0),
-    tokens: Number(response.headers.get("X-Model-Tokens") || 0),
+    tokens: tokenHeader === null ? null : Number(tokenHeader),
     elapsedMs: Number(response.headers.get("X-Elapsed-Ms") || 0),
     modelUnavailable: response.headers.get("X-Model-Unavailable") === "1",
   };
@@ -322,14 +325,15 @@ function fitHistory(history) {
 function showMetrics(metrics) {
   var model;
   if (metrics.modelCalls) {
-    model = "вызов модели: да (" + metrics.tokens + " токенов)";
+    var cost = metrics.tokens === null ? "расход токенов неизвестен" : metrics.tokens + " токенов";
+    model = "вызов модели: да (" + cost + ")";
   } else if (metrics.modelUnavailable) {
     model = "вызов модели: нет (модель недоступна, разбор лексиконом)";
   } else {
     model = "вызов модели: нет (лексикон)";
   }
   els.metrics.hidden = false;
-  els.metrics.textContent = "Ответ за " + metrics.elapsedMs + " мс · " + model;
+  els.metrics.textContent = metrics.elapsedMs ? "Ответ за " + metrics.elapsedMs + " мс · " + model : model;
 }
 
 // --- отправка ---------------------------------------------------------------
@@ -390,7 +394,11 @@ async function submit() {
     state.history.pop();
     showInPanel(renderServiceError(error));
     addBubble("assistant", "Не удалось получить ответ: " + error.message);
-    els.metrics.hidden = true;
+    if (error.metrics && error.metrics.modelCalls) {
+      showMetrics(error.metrics);
+    } else {
+      els.metrics.hidden = true;
+    }
     setStatus("сервис недоступен", true);
   } finally {
     setBusy(false);

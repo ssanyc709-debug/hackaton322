@@ -13,6 +13,7 @@ from app.catalog.explain import money
 from app.config import MAX_OPTIONS
 from app.contract import response
 from app.model import CatalogError
+from app.nlp.extract import is_unintelligible
 from app.nlp.lexicon import CITY_WORDS, UNSUPPORTED_CITY_WORDS, stem
 from app.nlp.numbers import (
     CAPPING_KINDS,
@@ -24,7 +25,7 @@ from app.nlp.numbers import (
     normalize_text,
     tokenize,
 )
-from app.nlp.product_intent import describes_product, terms_before_usage
+from app.nlp.product_intent import GENERIC_PRODUCT_WORDS, describes_product, terms_before_usage
 
 _OPTION_WORDS = frozenset({"вариант", "варианта", "варианты", "вариантов", "варианте"})
 _PURPOSE_WORDS = frozenset({"для", "под", "совместим", "совместима", "совместимый"})
@@ -294,17 +295,9 @@ class TextCatalog:
             missing.append(response.QUESTION_CATEGORIES)
         else:
             ids = self.matching_ids(terms)
-            if descriptive and not ids:
-                if resolver is not None and len(phrase.encode("utf-8")) <= 4000:
-                    # Совпавшие свойства товара обязательны. Слова о его применении
-                    # могут называть другой предмет, например бумагу для письма.
-                    anchors = [
-                        hits for word in required_terms
-                        if word not in _PURPOSE_WORDS and (hits := self._postings(word, self.head_postings))
-                    ]
-                    rewritten = _terms(resolver(phrase))
-                    ids = self.matching_ids(rewritten).intersection(*anchors)
-                if not ids:
+            if not ids:
+                ids, wanted_description = self._resolve_product(terms, required_terms, phrase, descriptive, resolver)
+                if wanted_description and not ids:
                     missing.append(response.QUESTION_CATEGORIES)
         if missing:
             return _clarify(missing)
@@ -331,6 +324,28 @@ class TextCatalog:
             for product in matches[:limit]
             if product.price_rub <= budget
         ])
+
+    def _resolve_product(
+        self, terms: Sequence[str], required_terms: Sequence[str], phrase: str,
+        descriptive: bool, resolver: ProductResolver | None,
+    ) -> tuple[set[str], bool]:
+        """Разбирает осмысленную фразу, которую индекс не сопоставил с названием."""
+        anchors = [
+            hits for word in required_terms
+            if word not in _PURPOSE_WORDS and (hits := self._postings(word, self.head_postings))
+        ]
+        unknown_words = {
+            word for word in terms if word.isalpha() and word not in (GENERIC_PRODUCT_WORDS | _PURPOSE_WORDS)
+        }
+        uncertain = descriptive or (len(unknown_words) > 1 and not anchors)
+        if not uncertain or is_unintelligible(phrase):
+            return set(), False
+        if resolver is None or len(phrase.encode("utf-8")) > 4000:
+            return set(), True
+
+        # Сохраняем распознанные свойства товара при перефразировании.
+        rewritten = _terms(resolver(phrase))
+        return self.matching_ids(rewritten).intersection(*anchors), True
 
 
 def _clarify(fields: Sequence[str]) -> dict[str, object]:

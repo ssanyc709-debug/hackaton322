@@ -48,7 +48,7 @@ from app.nlp.numbers import (
     normalize_text,
     tokenize,
 )
-from app.nlp.product_intent import describes_product
+from app.nlp.product_intent import GENERIC_PRODUCT_WORDS
 
 #: Верхняя граница «мелких» чисел: меньше этого числа не считаются бюджетом.
 MIN_BUDGET_GUESS = 1000
@@ -186,7 +186,7 @@ def extract_message(
             return cached
 
     slots = _lexicon_slots(normalized)
-    if resolver is not None and allow_model and not is_complete(slots):
+    if resolver is not None and allow_model and model_can_help(slots) and has_product_context(text, slots):
         slots = resolve_categories(slots, text, resolver)
 
     if cache is not None:
@@ -237,7 +237,7 @@ def _lexicon_slots(normalized: str) -> Slots:
     noun_positions = {
         hit.position
         for hit in (*category_hits, *unsupported_hits)
-        if hit.how != "fuzzy" and hit.word not in lexicon.category_adjectives
+        if hit.how != "fuzzy"
     }
     amounts = (
         amount
@@ -429,14 +429,8 @@ def _detect_adjustable(normalized: str) -> bool | None:
 
 
 def resolve_categories(slots: Slots, text: str, resolver: Resolver) -> Slots:
-    """Дополняет категории результатом одного вызова модели.
-
-    Описание назначения можно обработать до уточнения города и бюджета.
-    Для остальных формулировок сохраняется прежний порог вызова.
-    """
+    """Уточняет категорию по подготовленному тексту одним вызовом модели."""
     if not text or len(text.encode("utf-8")) > MAX_MODEL_TEXT_BYTES or not model_can_help(slots):
-        return slots
-    if (slots.city_id is None or slots.budget_rub is None) and not describes_product(text):
         return slots
     raw = resolver(text, slots)
     if not raw:
@@ -481,6 +475,38 @@ CONFIRMATION_WORDS: frozenset[str] = frozenset(
         "лады", "норм",
     }
 )
+
+_CONDITION_WORDS = FILLER_WORDS | MONEY_HINTS | CONFIRMATION_WORDS | GENERIC_PRODUCT_WORDS | NOISE_WORDS | {
+    "ну", "давай", "давайте", "город", "бюдж", "купить", "купи", "покажи", "покажите", "смотри",
+    "предложи", "предложите", "подскажи", "подскажите", "теперь", "тогда", "лучше",
+}
+
+
+def has_product_context(text: str, slots: Slots | None = None) -> bool:
+    """Проверяет, есть ли в реплике содержательный текст для определения товара."""
+    normalized = normalize_text(text)
+    tokens = tokenize(normalized)
+    useful_words = {i for i, word in enumerate(tokens) if word.isalpha() and word not in _CONDITION_WORDS}
+    if not useful_words:
+        return False
+
+    local = slots if slots is not None else _lexicon_slots(normalized)
+    if local.categories_explicit:
+        return True
+
+    lexicon = get_lexicon()
+    for hit in (*lexicon.scan_cities(tokens), *lexicon.scan_unsupported_cities(tokens)):
+        useful_words.discard(hit.position)
+        if hit.value == "rostov-na-donu" and tokens[hit.position + 1:hit.position + 3] == ("на", "дону"):
+            useful_words.discard(hit.position + 2)
+    budget_words: set[str] = set()
+    for amount in find_amounts(normalized):
+        if amount.unit == UNIT_RUB or (amount.unit is None and local.budget_rub is not None):
+            useful_words.difference_update(range(amount.position, amount.position + len(amount.raw.split())))
+            budget_words.update(amount.trigger.split())
+
+    content = " ".join(word for i, word in enumerate(tokens) if i in useful_words and word not in budget_words)
+    return bool(content) and not is_unintelligible(content)
 
 #: Минимальная длина «содержательного» слова для детектора непонятной реплики:
 #: короткие слова («ок», «ну») слишком шумные и мусором не считаются.

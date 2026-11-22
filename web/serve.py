@@ -245,7 +245,8 @@ def last_stderr_line(raw: bytes) -> str:
 
 
 #: Строка логов модели: ``модель: prompt=… completion=… total=…`` (app/llm/client.py).
-TOKENS_PATTERN = re.compile(r"модель:\s*prompt=(\d+)\s+completion=(\d+)\s+total=(\d+)")
+TOKENS_PATTERN = re.compile(r"\[buyer-assistant\] модель: prompt=(?:\d+|-) completion=(?:\d+|-) total=(\d+)")
+MODEL_REQUEST_LOG = "[buyer-assistant] модель: запрос к шлюзу"
 #: Итоговая строка ядра: ``готово: status=ok за 12 мс, всего 34 мс`` (app/main.py).
 ELAPSED_PATTERN = re.compile(r"всего\s+(\d+)\s+мс")
 NO_MODEL_MARKER = "модель: недоступна"
@@ -254,10 +255,8 @@ NO_MODEL_MARKER = "модель: недоступна"
 def backend_metrics(stderr: bytes) -> dict[str, Any]:
     """Метрики одного запуска бэкенда из его stderr.
 
-    Токены берём из строки ``модель: prompt=… total=…``, которую печатает
-    ``app/llm/client.py``. Если строки нет — модель не вызывалась: либо её нет,
-    либо задача решена лексиконом. Это позволяет интерфейсу честно показать
-    «модель не вызывалась», а не выдумать число.
+    Число вызовов берём из отметок начала запроса к шлюзу. Расход берём
+    из статистики ответа. Если шлюз не прислал статистику, расход неизвестен.
 
     Отдельно отмечаем ``model_unavailable``: бэкенд сообщил, что модель
     недоступна. Это НЕ то же самое, что режим сервера ``--offline``: строка
@@ -265,11 +264,13 @@ def backend_metrics(stderr: bytes) -> dict[str, Any]:
     сервера (см. ``_metrics_headers``), а не отсюда.
     """
     text = stderr.decode("utf-8", "replace")
-    usages = list(TOKENS_PATTERN.finditer(text))
-    tokens = sum(int(match.group(3)) for match in usages)
+    lines = text.splitlines()
+    calls = lines.count(MODEL_REQUEST_LOG)
+    usages = [match for line in lines if (match := TOKENS_PATTERN.fullmatch(line))]
+    tokens = sum(int(match.group(1)) for match in usages) if len(usages) == calls else None
     elapsed_match = ELAPSED_PATTERN.search(text)
     return {
-        "model_calls": len(usages),
+        "model_calls": calls,
         "tokens": tokens,
         "elapsed_ms": int(elapsed_match.group(1)) if elapsed_match else 0,
         "model_unavailable": NO_MODEL_MARKER in text,
@@ -566,10 +567,11 @@ def make_handler(api: Api) -> type[BaseHTTPRequestHandler]:
             mode = "offline" if api.offline else "on-demand"
             headers = {
                 "X-Model-Calls": str(metrics.get("model_calls", 0)),
-                "X-Model-Tokens": str(metrics.get("tokens", 0)),
                 "X-Elapsed-Ms": str(metrics.get("elapsed_ms", 0)),
                 "X-Model-Mode": mode,
             }
+            if metrics.get("tokens") is not None:
+                headers["X-Model-Tokens"] = str(metrics["tokens"])
             if metrics.get("model_unavailable"):
                 headers["X-Model-Unavailable"] = "1"
             return headers

@@ -1,0 +1,18 @@
+{
+  "products": [
+    {"id": "pn-solder-01", "title": "Паяльная станция 60 Вт", "city_id": "petrozavodsk", "city_name": "Петрозаводск", "price_rub": 3800},
+    {"id": "pn-solder-02", "title": "Паяльная станция с феном", "city_id": "petrozavodsk", "city_name": "Петрозаводск", "price_rub": 6200},
+    {"id": "pn-holder-01", "title": "Держатель для печатных плат", "city_id": "petrozavodsk", "city_name": "Петрозаводск", "price_rub": 850},
+    {"id": "pn-meter-01", "title": "Мультиметр цифровой", "city_id": "petrozavodsk", "city_name": "Петрозаводск", "price_rub": 1350, "aliases": ["Тестер напряжения"]},
+    {"id": "pn-burner-01", "title": "Выжигатель по дереву", "city_id": "petrozavodsk", "city_name": "Петрозаводск", "price_rub": 1600, "aliases": ["Пирограф"]},
+    {"id": "ps-easel-01", "title": "Мольберт настольный", "city_id": "pskov", "city_name": "Псков", "price_rub": 1150},
+    {"id": "ps-easel-02", "title": "Мольберт напольный", "city_id": "pskov", "city_name": "Псков", "price_rub": 2850},
+    {"id": "ps-easel-03", "title": "Мольберт складной", "city_id": "pskov", "city_name": "Псков", "price_rub": 3350},
+    {"id": "ps-case-01", "title": "Чехол для мольберта", "city_id": "pskov", "city_name": "Псков", "price_rub": 490},
+    {"id": "ps-sketch-01", "title": "Этюдник с ящиком", "city_id": "pskov", "city_name": "Псков", "price_rub": 2950},
+    {"id": "vn-easel-01", "title": "Мольберт напольный", "city_id": "veliky-novgorod", "city_name": "Великий Новгород", "price_rub": 2450},
+    {"id": "vn-glue-01", "title": "Клеевой пистолет 40 Вт", "city_id": "veliky-novgorod", "city_name": "Великий Новгород", "price_rub": 950},
+    {"id": "vn-glue-02", "title": "Клеевой пистолет 100 Вт", "city_id": "veliky-novgorod", "city_name": "Великий Новгород", "price_rub": 2100},
+    {"id": "vn-burner-01", "title": "Выжигатель по дереву с насадками", "city_id": "veliky-novgorod", "city_name": "Великий Новгород", "price_rub": 2350, "aliases": {"названия": ["Пирограф с насадками"]}}
+  ]
+}

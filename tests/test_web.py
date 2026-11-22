@@ -20,7 +20,9 @@ import sys
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from tests.test_llm_client import API_KEY, MODEL, FakeGateway, envelope
 from web.serve import ROOT, build_api, make_server
 
 CATALOG = ROOT / "data" / "catalog.json"
@@ -30,12 +32,12 @@ HOST = "127.0.0.1"
 class RunningServer:
     """Сервер на свободном порту в отдельном потоке; логи глушим на время теста."""
 
-    def __init__(self, catalog: Path) -> None:
+    def __init__(self, catalog: Path, *, offline: bool = True) -> None:
         self._quiet = io.StringIO()
         self._stderr = sys.stderr
         sys.stderr = self._quiet  # логи сборки не мешают выводу проверок
         try:
-            api = build_api(catalog, offline=True)
+            api = build_api(catalog, offline=offline)
             self.server = make_server(api, HOST, 0)
         except BaseException:
             sys.stderr = self._stderr
@@ -206,6 +208,61 @@ class WebGatewayTest(unittest.TestCase):
                 leaked = b"def main" in payload or b"ASSISTANT" in payload or b"base_url" in payload
                 self.assertIn(status, (400, 403, 404))
                 self.assertFalse(leaked, f"утечка содержимого по {path}")
+
+
+class ModelReportingTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.gateway = FakeGateway().start()
+        self.addCleanup(self.gateway.stop)
+        with patch.dict(os.environ, {
+            "LLM_BASE_URL": self.gateway.base_url,
+            "LLM_MODEL": MODEL,
+            "LLM_API_KEY": API_KEY,
+            "ASSISTANT_OFFLINE": "0",
+        }):
+            self.server = self.enterContext(RunningServer(CATALOG, offline=False))
+
+    def ask(self, text: str = "Найди то, на чём можно писать"):
+        body = json.dumps({"messages": [{"role": "user", "text": text}]}).encode("utf-8")
+        return call(self.server.port, "POST", "/api/answer", body, {"Content-Type": "application/json"})
+
+    def test_reports_every_request_even_if_the_gateway_omits_usage(self) -> None:
+        categories = {"categories": ["table"]}
+        no_usage = json.loads(envelope(categories))
+        del no_usage["usage"]
+        examples = [
+            (envelope(categories), "228"),
+            (json.dumps(no_usage).encode("utf-8"), None),
+            (envelope(categories, usage={"total_tokens": 91}), "91"),
+        ]
+        for number, (response, tokens) in enumerate(examples, start=1):
+            with self.subTest(request=number):
+                self.gateway.enqueue(200, response)
+                status, headers, body = self.ask()
+                self.assertEqual(status, 200, body)
+                self.assertEqual(len(self.gateway.requests), number)
+                self.assertEqual(headers["X-Model-Calls"], "1")
+                self.assertEqual(headers.get("X-Model-Tokens"), tokens)
+        status, headers, body = self.ask("Нужен стол в Таганроге")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(headers["X-Model-Calls"], "0")
+        self.assertEqual(headers["X-Model-Tokens"], "0")
+        self.assertEqual(len(self.gateway.requests), 3)
+
+    def test_rate_limit_retry_counts_as_one_model_request(self) -> None:
+        self.gateway.enqueue(429, b'{"error":{"message":"busy"}}', {"Retry-After": "0"})
+        self.gateway.enqueue(200, envelope({"categories": ["table"]}))
+        status, headers, body = self.ask()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(len(self.gateway.requests), 2)
+        self.assertEqual(headers["X-Model-Calls"], "1")
+
+    def test_gateway_error_still_reports_attempt(self) -> None:
+        self.gateway.enqueue(503, b'{"error":{"message":"gateway offline"}}')
+        status, headers, body = self.ask()
+        self.assertEqual(status, 502, body)
+        self.assertEqual(headers["X-Model-Calls"], "1")
+        self.assertNotIn("X-Model-Tokens", headers)
 
 
 if __name__ == "__main__":

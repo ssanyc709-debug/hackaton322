@@ -38,7 +38,6 @@ CATEGORY_WORDS: dict[str, tuple[str, ...]] = {
     "table": (
         "стол", "стола", "столы", "столов", "столе", "столик", "столика", "столиков",
         "столешница", "парта", "парты", "бюро", "секретер", "консоль", "верстак",
-        "компьютерный", "письменный", "обеденный", "рабочий",
         "table", "desk",
     ),
     "chair": (
@@ -56,14 +55,6 @@ CATEGORY_WORDS: dict[str, tuple[str, ...]] = {
         "lamp", "light",
     ),
 }
-
-#: Прилагательные из словаря категорий. Нечёткое совпадение с ними — не опечатка
-#: товара, а соседнее слово: «сидеть за работой» не означает «рабочий стол».
-#: Поэтому fuzzy-совпадение с таким ключом отбрасывается, а точное/стем — нет:
-#: «письменный», «компьютерная» продолжают работать.
-CATEGORY_ADJECTIVE_WORDS: tuple[str, ...] = (
-    "рабочий", "письменный", "компьютерный", "обеденный",
-)
 
 #: Окончания относительных прилагательных, например «Азовском», «Ростовский».
 CITY_ADJECTIVE_SUFFIXES: tuple[str, ...] = (
@@ -518,10 +509,6 @@ class Lexicon:
             for form in (word, stem(word))
             if len(form) >= 3
         )
-        # Формы прилагательных, с которыми fuzzy-совпадение не считается опечаткой.
-        self.category_adjectives = frozenset(
-            form for word in CATEGORY_ADJECTIVE_WORDS for form in candidate_forms(word)
-        )
 
     def scan_cities(self, tokens: Sequence[str]) -> tuple[Hit, ...]:
         """Распознаёт города по нормализованным токенам в порядке текста.
@@ -536,11 +523,10 @@ class Lexicon:
     def scan_categories(self, tokens: Sequence[str]) -> tuple[Hit, ...]:
         """Все упоминания поддерживаемых категорий в порядке текста.
 
-        Нечёткое совпадение с прилагательным отбрасывается: «сидеть за работой»
-        не становится «рабочим столом», а опечатка существительного («стлл»,
-        «креслр») по-прежнему распознаётся.
+        Прилагательные вроде «рабочий» сами по себе не определяют товар.
+        Названия и их опечатки («стлл», «креслр») распознаются напрямую.
         """
-        return self._scan(tokens, self.categories, reject_fuzzy=self.category_adjectives)
+        return self._scan(tokens, self.categories)
 
     def scan_unsupported_categories(self, tokens: Sequence[str]) -> tuple[Hit, ...]:
         """Находит предметы вне таксономии по словоформам, например «дивана»."""
@@ -554,17 +540,15 @@ class Lexicon:
         self,
         tokens: Sequence[str],
         index: WordIndex,
-        reject_fuzzy: frozenset[str] = frozenset(),
         adjective_suffixes: tuple[str, ...] = (),
         *,
         allow_fuzzy: bool = True,
     ) -> tuple[Hit, ...]:
         """Линейный проход по токенам; шум и служебные слова пропускаются.
 
-        ``reject_fuzzy`` — ключи словаря, совпадение с которыми не считается
-        опечаткой (прилагательные категорий). ``adjective_suffixes`` — окончания
-        токенов, для которых допускаются только точные совпадения и совпадения
-        по основе. ``allow_fuzzy`` отключает нечёткий поиск для всего индекса.
+        ``adjective_suffixes`` — окончания токенов, для которых допускаются
+        только точные совпадения и совпадения по основе. ``allow_fuzzy``
+        отключает нечёткий поиск для всего индекса.
         Результат сохраняет порядок токенов.
         """
         hits: list[Hit] = []
@@ -575,10 +559,8 @@ class Lexicon:
                 continue
             if not token.isalpha():
                 continue
-            value, how, matched = index.lookup(token, allow_fuzzy=allow_fuzzy)
+            value, how, _ = index.lookup(token, allow_fuzzy=allow_fuzzy)
             if not value:
-                continue
-            if how == "fuzzy" and matched in reject_fuzzy:
                 continue
             if how == "fuzzy" and token.endswith(adjective_suffixes):
                 continue

@@ -191,12 +191,49 @@ class ModelCallPolicyTest(unittest.TestCase):
         self.assertEqual(slots.categories, ("table",))
         self.assertEqual(missing_fields(slots), (FIELD_CITY, FIELD_BUDGET))
 
+    def test_rest_after_work_routes_to_model_without_inventing_table(self) -> None:
+        text = "ну смотри короче хочу упасть после тяжкого рабочего дня"
+        for texts, missing in (
+            ([text], (FIELD_CITY, FIELD_BUDGET, FIELD_CATEGORIES)),
+            ([text, "бюдж 5к город таган"], (FIELD_CATEGORIES,)),
+        ):
+            with self.subTest(texts=texts):
+                calls = []
+                slots = merge_history(
+                    texts, resolver=lambda prompt, state: calls.append(prompt) or {"categories": []},
+                )
+                self.assertEqual(calls, [text])
+                self.assertEqual(missing_fields(slots), missing)
+
     def test_model_error_is_not_swallowed(self) -> None:
         def broken(text: str, slots) -> dict[str, object]:
             raise TimeoutError("шлюз не ответил")
 
         with self.assertRaises(TimeoutError):
             merge_history(["Нужна деревяшка", "Таганрог", "15 тысяч"], resolver=broken)
+
+    def test_unrecognized_request_without_known_city_and_budget_reaches_gemma(self) -> None:
+        text = "Нужна деревяшка с четырьмя ножками"
+        slots = merge_history(
+            [text], resolver=lambda prompt, state: self.calls.append(prompt) or {"categories": []},
+        )
+        self.assertEqual(self.calls, [text])
+        self.assertEqual(missing_fields(slots), (FIELD_CITY, FIELD_BUDGET, FIELD_CATEGORIES))
+
+    def test_new_description_does_not_reuse_the_previously_named_product(self) -> None:
+        request = "Теперь найди то, на чём можно писать, ширина неважна"
+        for categories in (["table"], []):
+            with self.subTest(categories=categories):
+                self.calls.clear()
+                slots = merge_history(
+                    ["Лампа в Таганроге до 5000 ₽", request, "до 3500 ₽"],
+                    resolver=lambda prompt, state: self.calls.append(prompt) or {"categories": categories},
+                )
+                self.assertEqual(self.calls, [request])
+                self.assertEqual(slots.categories, tuple(categories))
+                self.assertEqual(slots.city_id, "taganrog")
+                self.assertEqual(slots.budget_rub, 3500)
+                self.assertEqual(missing_fields(slots), () if categories else (FIELD_CATEGORIES,))
 
     def test_long_dialogue_falls_back_to_last_message(self) -> None:
         """История длиннее предела модели: в один вызов уходит последняя реплика."""

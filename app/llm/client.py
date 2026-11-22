@@ -240,6 +240,8 @@ def complete(
     while True:
         attempts += 1
         timeout = _timeout_left(deadline)
+        if attempts == 1:
+            print(f"{_LOG_PREFIX} модель: запрос к шлюзу", file=sys.stderr, flush=True)
         status, response_headers, body = _http_post(url, payload, headers, timeout)
 
         if status == 200:
@@ -503,13 +505,19 @@ def _log_usage(envelope: Mapping[str, Any]) -> None:
     usage = envelope.get("usage")
     if not isinstance(usage, dict):
         return
-    prompt = usage.get("prompt_tokens")
-    completion = usage.get("completion_tokens")
-    total = usage.get("total_tokens")
-    if prompt is None and completion is None:
+    counts = (
+        value if type(value) is int and value >= 0 else None
+        for value in (usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens"))
+    )
+    prompt, completion, total = counts
+    if total is None and prompt is not None and completion is not None:
+        total = prompt + completion
+    if total is None:
         return
+    prompt_label = "-" if prompt is None else str(prompt)
+    completion_label = "-" if completion is None else str(completion)
     print(
-        f"{_LOG_PREFIX} модель: prompt={prompt} completion={completion} total={total}",
+        f"{_LOG_PREFIX} модель: prompt={prompt_label} completion={completion_label} total={total}",
         file=sys.stderr,
         flush=True,
     )

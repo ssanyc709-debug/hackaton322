@@ -129,6 +129,13 @@ class TextSearchTest(unittest.TestCase):
                 self.assertEqual(ids(answer), [product_id])
                 resolver.assert_called_once()
 
+    def test_unknown_phrase_reaches_gemma_without_pattern_or_known_location(self) -> None:
+        resolver = Mock(return_value="железная решётка")
+        query = "Нужна приблуда поперёк проёма"
+        result = self.index.answer([query], resolver=resolver)
+        self.assertEqual([question["field"] for question in result["questions"]], ["budget_rub", "city_id"])
+        resolver.assert_called_once_with("нужна приблуда поперек проема")
+
     def test_nested_catalog_alias_bypasses_model(self) -> None:
         self.write([{
             "id": "night-1", "title": "Светильник настольный", "price": 950, "city": "Томск",

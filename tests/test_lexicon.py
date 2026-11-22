@@ -179,10 +179,11 @@ class LexiconLookupTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(self.categories(text), ())
 
-    def test_category_adjective_is_not_a_typo(self) -> None:
-        """fuzzy до прилагательного не делает товар: «за работой» — не рабочий стол."""
+    def test_adjective_alone_does_not_name_a_product(self) -> None:
         self.assertEqual(self.categories("сидеть за работой"), ())
+        self.assertEqual(self.categories("после тяжкого рабочего дня"), ())
         self.assertEqual(self.categories("рабочий стол"), ("table",))
+        self.assertEqual(self.categories("компьютерное кресло"), ("chair",))
 
     def test_typo_of_a_noun_is_still_recognised(self) -> None:
         self.assertEqual(self.categories("нужен стлл"), ("table",))
